@@ -1,0 +1,7 @@
+# These packages are plain JS/YAML/JSON read by Node and by the DSH loader;
+# keep LF everywhere so a Windows checkout matches the live profile byte for byte.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.webp binary
+*.gif binary

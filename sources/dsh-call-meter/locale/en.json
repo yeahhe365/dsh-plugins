@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Call rate meter",
+    "description": "Shows model calls from the last 60 seconds under the composer, refreshed four times a second."
+  }
+}

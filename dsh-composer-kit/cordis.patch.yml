@@ -1,0 +1,7 @@
+# dsh-composer-kit bundle patch: one host row for the call meter's counter and
+# its GET /api/dsh-call-meter/stats route. The `dsh.client` declaration in
+# package.json makes the web app load ./client/client.js as the browser half,
+# which carries all five composer controls in one module.
+- insert:
+    - id: composer-kit
+      name: 'dsh-composer-kit'

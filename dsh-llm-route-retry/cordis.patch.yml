@@ -1,0 +1,6 @@
+# Bundle patch: mount the host-only recovery listener. No client half — the
+# retry surfaces through the standard `llm/retry` rows the conversation already
+# renders.
+- insert:
+    - id: llm-route-retry
+      name: 'dsh-llm-route-retry'

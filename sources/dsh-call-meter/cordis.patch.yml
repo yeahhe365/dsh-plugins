@@ -1,0 +1,6 @@
+# Bundle patch: one host row loads the package main entry (the counter and its
+# exact Fetch route); the `dsh.client` declaration makes the Web app load the
+# ./client bundle as the browser half.
+- insert:
+    - id: call-meter
+      name: 'dsh-call-meter'

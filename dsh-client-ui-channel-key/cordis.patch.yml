@@ -1,0 +1,7 @@
+# Bundle patch layer: the row mounts this package's main entry as the Host half
+# (a Cordis plugin that contributes nothing to the Host); the `dsh.client`
+# declaration makes the web app load ./client/client.js as the browser half,
+# which is where the header button and its key editor live.
+- insert:
+    - id: dsh-client-ui-channel-key
+      name: 'dsh-client-ui-channel-key'

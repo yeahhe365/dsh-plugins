@@ -1,0 +1,29 @@
+{
+  "name": "dsh-client-ui-composer-dock-wrap",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Wrap the composer dock row: every control below the input box stays whole and flows onto extra lines instead of being clipped.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  },
+  "files": [
+    "lib/index.js",
+    "lib/client.js"
+  ]
+}

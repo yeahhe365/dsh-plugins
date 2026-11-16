@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Channel API key",
+    "description": "Adds a key button to the conversation header, just left of the Session's More menu. It edits the API key of the model channel behind the current model selection: the card shows the selected provider and model, the credential reference that channel resolves, and whether a key is stored, and it saves or clears that key without leaving the chat. The key goes to this profile's credential store through the same Host API the Models settings page uses; it is never written into the transcript. A channel whose profile names no credential reference gets the conventional <PROVIDER>_API_KEY reference written into its provider profile when you save. Channels that sign in with a DeepSeek account have no editable key, and a session with no selected model says so. Turning the plugin off removes only the button; stored keys stay."
+  }
+}
