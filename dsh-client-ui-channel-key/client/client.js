@@ -111,6 +111,7 @@ window.__ModuleLoader__.load({
       'action.retry': '重试',
       'state.loading': '读取渠道配置…',
       'state.saving': '保存中…',
+      'state.clearing': '清除中…',
       'state.saved': '已保存，下一次请求生效',
       'state.cleared': '已清除该渠道的密钥',
       'error.empty': '密钥不能为空',
@@ -143,6 +144,7 @@ window.__ModuleLoader__.load({
       'action.retry': 'Retry',
       'state.loading': 'Reading channel configuration…',
       'state.saving': 'Saving…',
+      'state.clearing': 'Clearing…',
       'state.saved': 'Saved — the next request uses it',
       'state.cleared': 'The channel key was cleared',
       'error.empty': 'The key cannot be empty',
@@ -467,6 +469,14 @@ window.__ModuleLoader__.load({
       var position = positionState[0]
       var setPosition = positionState[1]
 
+      /* Which action owns the pending state. Both buttons go busy together, but
+         only the one that was pressed may say so: a save must not relabel the
+         clear button as "保存中…" and vice versa. Declared last so the earlier
+         hook positions stay stable for the smoke test's state plan. */
+      var clearingState = React.useState(false)
+      var clearing = clearingState[0]
+      var setClearing = clearingState[1]
+
       var anchorRef = React.useRef(null)
       var cardRef = React.useRef(null)
       var inputRef = React.useRef(null)
@@ -483,6 +493,7 @@ window.__ModuleLoader__.load({
         setReveal(false)
         setNotice(null)
         setBusy(false)
+        setClearing(false)
       }, [])
 
       var load = React.useCallback(function () {
@@ -511,6 +522,7 @@ window.__ModuleLoader__.load({
         setReveal(false)
         setNotice(null)
         setBusy(false)
+        setClearing(false)
         setOpen(true)
         load()
       }, [load])
@@ -597,6 +609,7 @@ window.__ModuleLoader__.load({
         var channel = view.channel
         if (channel === null || channel.ref === undefined || busy) return
         setBusy(true)
+        setClearing(true)
         setNotice(null)
         Promise.resolve()
           .then(function () { return face.clear(channel) })
@@ -604,6 +617,7 @@ window.__ModuleLoader__.load({
             if (!outcome.ok) {
               setNotice({ kind: 'error', text: outcome.message })
               setBusy(false)
+              setClearing(false)
               return
             }
             setDraft('')
@@ -612,13 +626,15 @@ window.__ModuleLoader__.load({
               .then(function () { return face.describe(channel) })
               .then(function (info) {
                 setBusy(false)
+                setClearing(false)
                 setView(function (previous) {
                   if (previous.channel === null) return previous
                   return { phase: previous.phase, message: previous.message, channel: Object.assign({}, previous.channel, { info: info }) }
                 })
-              }, function () { setBusy(false) })
+              }, function () { setBusy(false); setClearing(false) })
           }, function (error) {
             setBusy(false)
+            setClearing(false)
             setNotice({ kind: 'error', text: messageOf(error) })
           })
       }
@@ -723,7 +739,7 @@ window.__ModuleLoader__.load({
             'data-chk-action': '',
             disabled: !configured || busy,
             onClick: clear,
-          }, busy ? t('state.saving') : t('action.clear')),
+          }, clearing ? t('state.clearing') : t('action.clear')),
           h('span', { 'data-chk-spacer': '' }),
           h('button', { type: 'button', 'data-chk-action': '', onClick: close }, t('action.cancel')),
           h('button', {
@@ -732,7 +748,7 @@ window.__ModuleLoader__.load({
             'data-variant': 'primary',
             disabled: !editable || busy,
             onClick: submit,
-          }, busy ? t('state.saving') : t('action.save')))
+          }, busy && !clearing ? t('state.saving') : t('action.save')))
       }
 
       function renderCardBody() {
