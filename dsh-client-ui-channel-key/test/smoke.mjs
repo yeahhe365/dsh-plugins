@@ -415,6 +415,8 @@ const poolFixture = {
   assert.equal(findByAttr(withPool, 'data-chk-row')[0].props.draggable, true, 'a row can be dragged to reorder')
   assert.equal(findByAttr(withPool, 'data-chk-input').length, 1)
   assert.equal(findByAttr(withPool, 'data-chk-input')[0].props.placeholder, 'field.placeholder.multi')
+  assert.equal(findByAttr(withPool, 'data-chk-paste').length, 1, 'the field can read the clipboard')
+  assert.equal(textOf(findByAttr(withPool, 'data-chk-paste')[0]), 'action.paste')
   // Three rows, at most four controls each: the active row has no "use", the
   // rejected one swaps "use" for "restore".
   assert.equal(findByAttr(withPool, 'data-chk-rowaction').length, 3 + 4 + 4)
@@ -432,6 +434,59 @@ const poolFixture = {
   assert.match(textOf(broken), /nope/)
   assert.equal(findByAttr(broken, 'data-chk-action').length, 2)
   console.log('ok  pool renders')
+}
+
+/* --------------------------------------------------------------- clipboard */
+
+{
+  const channel2 = { ...channel }
+  const view = {
+    phase: 'ready',
+    channel: channel2,
+    pool: { supported: true, ok: true, pool: poolFixture },
+    message: null,
+  }
+  const { exports, sandbox } = loadPlugin({ states: { 0: true, 1: view, 6: { top: 10, left: 10 } } })
+  const added = []
+  const face = {
+    translate: (key) => key,
+    resolve: async () => channel2,
+    pool: async () => view.pool,
+    addKeys: async (channelArg, keys) => {
+      added.push(keys.slice())
+      return { ok: true, pool: poolFixture }
+    },
+    mutate: async () => ({ ok: true, pool: poolFixture }),
+    save: async () => ({ ok: true }),
+    describe: async () => channel2.info,
+    clear: async () => ({ ok: true }),
+  }
+
+  // A clipboard carrying a block adds every key, exactly like a multi-line paste.
+  sandbox.navigator.clipboard = { readText: async () => 'sk-clip-1\nsk-clip-2\n' }
+  const tree = exports.__internals.ChannelKeyButton({ sessionId: 's1', channelKey: face })
+  const paste = findByAttr(tree, 'data-chk-paste')[0]
+  assert.equal(typeof paste.props.onClick, 'function')
+  await paste.props.onClick()
+  assert.equal(added.length, 1)
+  assert.equal(added[0].join(','), 'sk-clip-1,sk-clip-2')
+
+  // A single key is added by the button too: it exists to save the Ctrl+V step.
+  const single = loadPlugin({ states: { 0: true, 1: view, 6: { top: 10, left: 10 } } })
+  single.sandbox.navigator.clipboard = { readText: async () => '  sk-clip-3  ' }
+  const singleTree = single.exports.__internals.ChannelKeyButton({ sessionId: 's1', channelKey: face })
+  const singlePaste = findByAttr(singleTree, 'data-chk-paste')[0]
+  await singlePaste.props.onClick()
+  assert.equal(added.length, 2)
+  assert.equal(added[1].join(','), 'sk-clip-3')
+
+  // A refused clipboard read is reported, and adds nothing.
+  const denied = loadPlugin({ states: { 0: true, 1: view, 6: { top: 10, left: 10 } } })
+  denied.sandbox.navigator.clipboard = { readText: async () => { throw new Error('NotAllowedError') } }
+  const deniedTree = denied.exports.__internals.ChannelKeyButton({ sessionId: 's1', channelKey: face })
+  await findByAttr(deniedTree, 'data-chk-paste')[0].props.onClick()
+  assert.equal(added.length, 2)
+  console.log('ok  clipboard paste')
 }
 
 console.log('\nall smoke checks passed')

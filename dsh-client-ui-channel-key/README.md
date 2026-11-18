@@ -17,15 +17,16 @@ selected. Clicking it opens a small card anchored under the button:
 | 凭证引用 | The credential reference that channel resolves, e.g. `KK_API_KEY` |
 | 密钥列表 | One row per key: `#n`, masked preview, `当前使用` / `已失效`, and on hover 恢复 · 上移 · 下移 · 使用 · 删除 |
 | 汇总 | `3 个密钥 · 1 已失效`, with the drag hint on the right |
-| API 密钥 | A write-only field; one key per `Enter`, or paste a whole block at once |
+| API 密钥 | A write-only field with `粘贴` / `显示`; one key per `Enter`, or paste a whole block at once |
 
 The active row carries a left accent bar; a rejected row is struck through and
 its badge tooltip says when it failed. Rows are dragged to reorder (one `move`
 op on drop), and the hover controls stay reachable by keyboard through
-`focus-within`. `添加` appends the field's keys to the pool, `导出清单` copies a
-masked inventory (order, preview, state — never the keys), `清除全部` removes the
-whole pool, and `取消` / `Esc` / a click outside closes the card. The
-`显示` / `隐藏` toggle is the same one the single-key card had.
+`focus-within`. `添加` appends the field's keys to the pool, `粘贴` reads the
+clipboard and adds what it holds (a refused read says so and points at `Ctrl+V`),
+`导出清单` copies a masked inventory (order, preview, state — never the keys),
+`清除全部` removes the whole pool, and `取消` / `Esc` / a click outside closes the
+card. The `显示` / `隐藏` toggle is the same one the single-key card had.
 
 ## The pool
 

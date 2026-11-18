@@ -62,15 +62,20 @@ window.__ModuleLoader__.load({
       'font-family:var(--dsw-font-mono,ui-monospace,SFMono-Regular,Menlo,monospace)}',
 
       '[data-chk-field]{position:relative;display:flex;align-items:center}',
-      '[data-chk-input]{flex:1;min-width:0;height:30px;box-sizing:border-box;padding:0 52px 0 8px;',
+      '[data-chk-input]{flex:1;min-width:0;height:30px;box-sizing:border-box;padding:0 86px 0 8px;',
       'border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-sm,6px);',
       'background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font-size:13px;',
       'font-family:inherit;outline:none}',
       '[data-chk-input]:focus{border-color:var(--dsw-alias-state-business-primary)}',
       '[data-chk-input]:disabled{color:var(--dsw-alias-label-dimmed)}',
-      '[data-chk-reveal]{position:absolute;top:0;right:0;height:30px;padding:0 8px;border:none;background:transparent;',
-      'color:var(--dsw-alias-label-tertiary);font-size:12px;cursor:pointer}',
-      '[data-chk-reveal]:hover{color:var(--dsw-alias-label-primary)}',
+      '[data-chk-fieldtools]{position:absolute;top:0;right:0;display:flex;align-items:center;gap:2px;',
+      'height:30px;padding-right:4px}',
+      '[data-chk-fieldtools] button{height:22px;padding:0 6px;border:none;border-radius:var(--dsw-radius-sm,6px);',
+      'background:transparent;color:var(--dsw-alias-label-tertiary);font-size:12px;font-family:inherit;cursor:pointer}',
+      '[data-chk-fieldtools] button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);',
+      'color:var(--dsw-alias-label-primary)}',
+      '[data-chk-fieldtools] button:focus-visible{outline:none;box-shadow:0 0 0 2px var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))}',
+      '[data-chk-fieldtools] button:disabled{opacity:.4;cursor:default}',
 
       '[data-chk-note]{font-size:12px;color:var(--dsw-alias-label-tertiary)}',
       '[data-chk-error]{font-size:12px;color:var(--dsw-alias-state-error-primary)}',
@@ -171,11 +176,15 @@ window.__ModuleLoader__.load({
       'pool.down': '下移',
       'notice.pool': '按顺序使用；某个密钥报「API 密钥无效」时自动换下一个，失效的密钥会跳过。',
       'state.added': '已添加，下一次请求按顺序使用',
+      'state.pasted': '已粘贴，确认后点「添加」',
       'state.updated': '已更新',
       'error.pool': '读取密钥池失败',
       'error.poolUnsupported': '当前后台还不支持密钥池，请重启桌面端后再试',
       'error.oneAtATime': '当前后台只支持单个密钥，请一次只填一个',
       'action.export': '导出清单',
+      'action.paste': '粘贴',
+      'error.paste': '无法读取剪贴板，请用 Ctrl+V 粘贴',
+      'error.clipboardEmpty': '剪贴板里没有密钥',
       'pool.keys': '个密钥',
       'pool.drag': '拖动可排序',
       'pool.invalidAt': '失效于',
@@ -232,11 +241,15 @@ window.__ModuleLoader__.load({
       'pool.down': 'Move down',
       'notice.pool': 'Used in order. A key rejected as an invalid API key hands the request to the next one; rejected keys are skipped.',
       'state.added': 'Added — the next request uses them in order',
+      'state.pasted': 'Pasted — press Add to store it',
       'state.updated': 'Updated',
       'error.pool': 'Could not read the key pool',
       'error.poolUnsupported': 'This Host predates the key pool — restart the desktop app and try again',
       'error.oneAtATime': 'This Host accepts one key at a time; enter a single key',
       'action.export': 'Export list',
+      'action.paste': 'Paste',
+      'error.paste': 'Could not read the clipboard — paste with Ctrl+V instead',
+      'error.clipboardEmpty': 'The clipboard holds no key',
       'pool.keys': 'keys',
       'pool.drag': 'Drag to reorder',
       'pool.invalidAt': 'Rejected at',
@@ -950,7 +963,7 @@ window.__ModuleLoader__.load({
       function addToPool(channel, keys) {
         setBusy(true)
         setNotice(null)
-        Promise.resolve()
+        return Promise.resolve()
           .then(function () { return face.addKeys(channel, keys) })
           .then(function (outcome) {
             if (!outcome.ok) {
@@ -1062,6 +1075,47 @@ window.__ModuleLoader__.load({
             setNotice({ kind: 'saved', text: t('state.exported') })
           }, function () {
             setNotice({ kind: 'error', text: t('error.clipboard') })
+          })
+      }
+
+      /**
+       * Read the clipboard and add the keys it holds. A refused read is
+       * reported rather than swallowed: the browser may deny `readText`, and the
+       * field's own Ctrl+V still works in that case.
+       * @returns {Promise<void>} resolves once the attempt has been reported.
+       */
+      function pasteFromClipboard() {
+        var channel = view.channel
+        if (channel === null || channel.ref === undefined || busy) return Promise.resolve()
+        var clipboard = typeof navigator === 'undefined' ? undefined : navigator.clipboard
+        if (clipboard === undefined || clipboard === null || typeof clipboard.readText !== 'function') {
+          setNotice({ kind: 'error', text: t('error.paste') })
+          return Promise.resolve()
+        }
+        return Promise.resolve()
+          .then(function () { return clipboard.readText() })
+          .then(function (text) {
+            var keys = splitKeyLines(text)
+            if (keys.length === 0) {
+              setNotice({ kind: 'error', text: t('error.clipboardEmpty') })
+              return
+            }
+            for (var index = 0; index < keys.length; index += 1) {
+              var failure = keyFailure(keys[index])
+              if (failure !== null) {
+                setNotice({ kind: 'error', text: t(failure) })
+                return
+              }
+            }
+            if (poolMode() && view.pool.ok === true) return addToPool(channel, keys)
+            if (keys.length > 1) {
+              setNotice({ kind: 'error', text: t('error.oneAtATime') })
+              return
+            }
+            setDraft(keys[0])
+            setNotice({ kind: 'saved', text: t('state.pasted') })
+          }, function () {
+            setNotice({ kind: 'error', text: t('error.paste') })
           })
       }
 
@@ -1266,13 +1320,21 @@ window.__ModuleLoader__.load({
                 submit()
               },
             }),
-            h('button', {
-              type: 'button',
-              'data-chk-reveal': '',
-              tabIndex: -1,
-              'aria-label': t(reveal ? 'field.hide' : 'field.show'),
-              onClick: function () { setReveal(function (value) { return !value }) },
-            }, t(reveal ? 'field.hide' : 'field.show'))),
+            h('div', { 'data-chk-fieldtools': '' },
+              h('button', {
+                type: 'button',
+                'data-chk-paste': '',
+                disabled: busy,
+                title: t('action.paste'),
+                onClick: pasteFromClipboard,
+              }, t('action.paste')),
+              h('button', {
+                type: 'button',
+                'data-chk-reveal': '',
+                tabIndex: -1,
+                'aria-label': t(reveal ? 'field.hide' : 'field.show'),
+                onClick: function () { setReveal(function (value) { return !value }) },
+              }, t(reveal ? 'field.hide' : 'field.show')))),
         ]
         if (channel.derived) {
           rows.push(h('div', { key: 'derived', 'data-chk-note': '' }, t(channel.ns === undefined ? 'notice.undeclared' : 'notice.derived')))
@@ -1423,13 +1485,21 @@ window.__ModuleLoader__.load({
                 submit()
               },
             }),
-            h('button', {
-              type: 'button',
-              'data-chk-reveal': '',
-              tabIndex: -1,
-              'aria-label': t(reveal ? 'field.hide' : 'field.show'),
-              onClick: function () { setReveal(function (value) { return !value }) },
-            }, t(reveal ? 'field.hide' : 'field.show'))),
+            h('div', { 'data-chk-fieldtools': '' },
+              h('button', {
+                type: 'button',
+                'data-chk-paste': '',
+                disabled: busy,
+                title: t('action.paste'),
+                onClick: pasteFromClipboard,
+              }, t('action.paste')),
+              h('button', {
+                type: 'button',
+                'data-chk-reveal': '',
+                tabIndex: -1,
+                'aria-label': t(reveal ? 'field.hide' : 'field.show'),
+                onClick: function () { setReveal(function (value) { return !value }) },
+              }, t(reveal ? 'field.hide' : 'field.show')))),
         ]
         if (channel.derived) {
           rows.push(h('div', { key: 'derived', 'data-chk-note': '' }, t(channel.ns === undefined ? 'notice.undeclared' : 'notice.derived')))
