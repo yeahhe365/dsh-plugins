@@ -43,7 +43,7 @@ const PAIRS = [
 
 /** Files that never belong in the snapshot. */
 const SKIP_DIRS = new Set(['node_modules', '.git', '.venv', '__pycache__'])
-const SKIP_FILES = /(^|[\\/])(\.DS_Store|Thumbs\.db|.*\.log)$/
+const SKIP_FILES = /(^|[\\/])(\.DS_Store|Thumbs\.db|.*\.log|.*\.bak(-\d{8}-\d{6})?)$/
 
 /**
  * Every file below `root`, as paths relative to it.
