@@ -136,7 +136,7 @@ const channel = {
   assert.equal(valueAt({ a: 1 }, []).a, 1)
 
   const position = exports.__internals.anchorPosition({ right: 1800, bottom: 100 })
-  assert.equal(position.left, 1280 - 360 - 12)
+  assert.equal(position.left, 1280 - 380 - 12)
   assert.equal(position.top, 108)
   const narrow = exports.__internals.anchorPosition({ right: 100, bottom: 900 })
   assert.equal(narrow.left, 12)
@@ -351,6 +351,87 @@ function render(statePlan, extra = {}) {
   const noFace = render({ open: false, view: { phase: 'loading', channel: null, message: null } }, { noFace: true })
   assert.equal(findByAttr(noFace, 'data-chk-btn').length, 1)
   console.log('ok  renders')
+}
+
+/* ------------------------------------------------------------------ pool */
+
+{
+  const { exports } = loadPlugin()
+  const { splitKeyLines } = exports.__internals
+
+  // The bundle runs in its own realm, so compare the joined content rather than
+  // the array identity.
+  assert.equal(splitKeyLines('').join('|'), '')
+  assert.equal(splitKeyLines('  \n ').join('|'), '')
+  assert.equal(splitKeyLines('sk-a').join('|'), 'sk-a')
+  assert.equal(splitKeyLines('  sk-a  \n sk-b\r\n\nsk-c ').join('|'), 'sk-a|sk-b|sk-c')
+  console.log('ok  key lines')
+}
+
+/* ------------------------------------------------------------ drag + export */
+
+const poolFixture = {
+  provider: 'kk',
+  ref: 'KK_API_KEY',
+  active: 1,
+  entries: [
+    { slot: 1, ref: 'KK_API_KEY__1', configured: true, masked: 'sk-…a1b2', invalidAt: undefined },
+    { slot: 2, ref: 'KK_API_KEY__2', configured: true, masked: 'sk-…c3d4', invalidAt: 1700000000000 },
+    { slot: 3, ref: 'KK_API_KEY__3', configured: true, masked: 'sk-…e5f6', invalidAt: undefined },
+  ],
+}
+
+{
+  const { exports } = loadPlugin()
+  const { deltaFor, inventoryText } = exports.__internals
+
+  // A drag is one `move` op: the delta is the distance between the two rows.
+  assert.equal(deltaFor(0, 2), 2)
+  assert.equal(deltaFor(2, 0), -2)
+  assert.equal(deltaFor(1, 1), 0)
+
+  const inventory = inventoryText(poolFixture, { active: '当前使用', invalid: '已失效' })
+  assert.match(inventory, /#1/)
+  assert.match(inventory, /sk-…a1b2/)
+  assert.match(inventory, /当前使用/)
+  assert.match(inventory, /已失效/)
+  assert.equal(inventory.split('\n').length, 3)
+  console.log('ok  drag deltas and inventory')
+}
+
+{
+  const withPool = render({ open: true, view: { phase: 'ready', channel, pool: { supported: true, ok: true, pool: poolFixture }, message: null } })
+  const listText = textOf(withPool)
+  assert.match(listText, /#1/)
+  assert.match(listText, /#2/)
+  assert.match(listText, /pool\.active/)
+  assert.match(listText, /pool\.invalid/)
+  assert.match(listText, /sk-…c3d4/)
+  const summary = findByAttr(withPool, 'data-chk-summary')
+  assert.equal(summary.length, 1, 'the list carries a one-line summary')
+  assert.match(textOf(summary[0]), /3/)
+  assert.match(textOf(summary[0]), /pool\.keys/)
+  assert.equal(findByAttr(withPool, 'data-chk-row').length, 3)
+  assert.equal(findByAttr(withPool, 'data-chk-row')[0].props.draggable, true, 'a row can be dragged to reorder')
+  assert.equal(findByAttr(withPool, 'data-chk-input').length, 1)
+  assert.equal(findByAttr(withPool, 'data-chk-input')[0].props.placeholder, 'field.placeholder.multi')
+  // Three rows, at most four controls each: the active row has no "use", the
+  // rejected one swaps "use" for "restore".
+  assert.equal(findByAttr(withPool, 'data-chk-rowaction').length, 3 + 4 + 4)
+  assert.equal(findByAttr(withPool, 'data-chk-action').length, 4, 'export, clear all, cancel, add')
+  assert.ok(textOf(withPool).includes('action.export'), 'the card can copy the inventory')
+  assert.match(listText, /notice\.pool/)
+
+  // A Host before the pool route keeps the original single-key card.
+  const legacyHost = render({ open: true, view: { phase: 'ready', channel, pool: { supported: false }, message: null } })
+  assert.equal(findByAttr(legacyHost, 'data-chk-input')[0].props.placeholder, 'field.placeholder.saved')
+  assert.equal(findByAttr(legacyHost, 'data-chk-row').length, 0)
+
+  // A Host that answers with an error says so and offers a retry.
+  const broken = render({ open: true, view: { phase: 'ready', channel, pool: { supported: true, ok: false, message: 'nope' }, message: null } })
+  assert.match(textOf(broken), /nope/)
+  assert.equal(findByAttr(broken, 'data-chk-action').length, 2)
+  console.log('ok  pool renders')
 }
 
 console.log('\nall smoke checks passed')

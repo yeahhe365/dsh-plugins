@@ -1,8 +1,8 @@
 {
   "name": "dsh-client-ui-channel-key",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
-  "description": "Header button that edits the API key of the model channel behind the current model selection. · 顶栏按钮：编辑当前模型渠道的 API 密钥。",
+  "description": "Header button that edits the key pool of the model channel behind the current model selection, and the Host-side rotation that follows a rejected key. · 顶栏按钮：编辑当前模型渠道的密钥池；密钥被判失效时宿主自动换下一个。",
   "type": "module",
   "main": "index.js",
   "exports": {
@@ -14,17 +14,22 @@
   },
   "files": [
     "index.js",
+    "lib/pool.js",
     "client/client.js",
     "cordis.patch.yml",
     "locale/*.json",
     "README.md",
     "icon.svg"
   ],
+  "scripts": {
+    "test": "node --test test/pool.test.mjs test/rotate.test.mjs test/wiring.test.mjs && node test/smoke.mjs"
+  },
   "keywords": [
     "dsh-plugin",
     "deepseek-harness",
     "api-key",
-    "model-channel"
+    "model-channel",
+    "key-pool"
   ],
   "dsh": {
     "bundle": {
