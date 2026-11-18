@@ -420,7 +420,8 @@ const poolFixture = {
   // Three rows, at most four controls each: the active row has no "use", the
   // rejected one swaps "use" for "restore".
   assert.equal(findByAttr(withPool, 'data-chk-rowaction').length, 3 + 4 + 4)
-  assert.equal(findByAttr(withPool, 'data-chk-action').length, 4, 'export, clear all, cancel, add')
+  assert.equal(findByAttr(withPool, 'data-chk-action').length, 5, 'self-check, export, clear all, cancel, add')
+  assert.equal(findByAttr(withPool, 'data-chk-probe').length, 1, 'the pool can be checked key by key')
   assert.ok(textOf(withPool).includes('action.export'), 'the card can copy the inventory')
   assert.match(listText, /notice\.pool/)
 
@@ -487,6 +488,26 @@ const poolFixture = {
   await findByAttr(deniedTree, 'data-chk-paste')[0].props.onClick()
   assert.equal(added.length, 2)
   console.log('ok  clipboard paste')
+
+  // The self-check button asks the Host to probe the pool.
+  const probeCalls = []
+  const probeFace = {
+    ...face,
+    probe: async () => {
+      probeCalls.push('probe')
+      return {
+        supported: true,
+        ok: true,
+        pool: poolFixture,
+        probe: { results: [{ slot: 1, ok: true }, { slot: 2, ok: false, code: 'AUTH', message: 'x' }] },
+      }
+    },
+  }
+  const probeTree = loadPlugin({ states: { 0: true, 1: view, 6: { top: 10, left: 10 } } })
+  const probeButton = findByAttr(probeTree.exports.__internals.ChannelKeyButton({ sessionId: 's1', channelKey: probeFace }), 'data-chk-probe')[0]
+  await probeButton.props.onClick()
+  assert.equal(probeCalls.length, 1)
+  console.log('ok  self-check button')
 }
 
 console.log('\nall smoke checks passed')

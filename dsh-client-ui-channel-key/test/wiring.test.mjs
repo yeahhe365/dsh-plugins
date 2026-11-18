@@ -11,13 +11,18 @@ import assert from 'node:assert/strict'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { after, test } from 'node:test'
+import { after, beforeEach, test } from 'node:test'
 
 import { apply } from '../index.js'
 
 const home = mkdtempSync(join(tmpdir(), 'channel-key-'))
 const previousHome = process.env.DSH_HOME
 process.env.DSH_HOME = home
+
+/** Every test starts from an empty pool document. */
+beforeEach(() => {
+  rmSync(join(home, '.dsh-channel-key'), { recursive: true, force: true })
+})
 
 after(() => {
   if (previousHome === undefined) delete process.env.DSH_HOME
@@ -71,13 +76,38 @@ function fakeHost(services) {
 }
 
 /** A Host with a credential seam and a Connection fetch registry. */
-function boot(credentials) {
+function boot(credentials, extra = {}) {
   const host = fakeHost({
     credentials,
     connection: { fetch: { register(route) { host.routes.push(route); return async () => {} } } },
+    ...extra,
   })
   apply(host.ctx)
   return host
+}
+
+/** A settings/llm pair describing one openai-compatible route. */
+function channelServices(overrides = {}) {
+  const profile = {
+    api: 'openai-completions',
+    baseURL: 'https://relay.test/v1',
+    models: [{ id: 'deepseek-v4.1-flash' }],
+    ...overrides,
+  }
+  return {
+    llm: {
+      listConfigurableProviders: () => [{
+        provider: 'kk',
+        displayName: 'KK',
+        settingsNs: 'llm-pi-ai',
+        settingsPath: ['providers', 'kk'],
+        defaultBaseURL: 'https://relay.test/v1',
+      }],
+    },
+    settings: {
+      describe: () => [{ ns: 'llm-pi-ai', revision: 1, value: { providers: { kk: profile } } }],
+    },
+  }
 }
 
 /** A request against the pool route. */
@@ -188,4 +218,46 @@ test('the pool document holds references and marks, never a key', async () => {
   const text = readFileSync(file, 'utf8')
   assert.ok(text.includes('KK_API_KEY'))
   assert.ok(!text.includes('sk-first') && !text.includes('sk-second'), 'no key value reaches the document')
+})
+
+test('a self-check probes every key and records the verdicts', async () => {
+  const credentials = fakeCredentials({ KK_API_KEY: 'sk-good-0001' })
+  const { routes } = boot(credentials, channelServices())
+  await routes[0].fetch(new Request(poolUrl(), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ provider: 'kk', ref: 'KK_API_KEY', op: 'add', keys: ['sk-bad-0002'] }),
+  }))
+
+  const seen = []
+  const original = globalThis.fetch
+  globalThis.fetch = async (url, init) => {
+    seen.push({ url: String(url), init })
+    const key = String(init.headers.authorization).replace('Bearer ', '')
+    return key === 'sk-bad-0002'
+      ? new Response('{"error":{"message":"invalid token"}}', { status: 401 })
+      : new Response('{"choices":[]}', { status: 200 })
+  }
+  try {
+    const response = await routes[0].fetch(new Request(poolUrl(), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ provider: 'kk', ref: 'KK_API_KEY', op: 'probe' }),
+    }))
+    const body = await response.json()
+
+    assert.equal(response.status, 200)
+    assert.equal(body.ok, true)
+    assert.equal(body.probe.results.length, 2)
+    assert.equal(body.pool.entries[0].invalidAt, undefined, 'the working key stays usable')
+    assert.equal(body.pool.entries[1].code, 'AUTH', 'the rejected key is marked')
+    assert.match(body.pool.entries[1].message, /invalid token/)
+
+    // The key travelled to the configured endpoint only, in a one-token request.
+    assert.equal(seen.length, 2)
+    assert.equal(seen[0].url, 'https://relay.test/v1/chat/completions')
+    assert.equal(JSON.parse(seen[0].init.body).max_tokens, 1)
+  } finally {
+    globalThis.fetch = original
+  }
 })

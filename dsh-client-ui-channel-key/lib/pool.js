@@ -41,6 +41,20 @@ function emptyPool(ref) {
   return { ref, order: [], active: null, nextSlot: 1, invalid: {} }
 }
 
+/**
+ * The stored shape of one failure mark.
+ * @param {number} at - when the key was rejected.
+ * @param {{code?: string, message?: string}} reason - what the provider said, if anything.
+ * @returns {{at: number, code?: string, message?: string}} the mark to persist.
+ */
+function markOf(at, reason = {}) {
+  const mark = { at }
+  if (typeof reason.code === 'string' && reason.code.length > 0) mark.code = reason.code
+  const message = typeof reason.message === 'string' ? reason.message.replace(/\s+/g, ' ').trim().slice(0, 160) : ''
+  if (message.length > 0) mark.message = message
+  return mark
+}
+
 /** A positive integer, or the fallback. */
 function intOr(value, fallback) {
   return Number.isSafeInteger(value) && value > 0 ? value : fallback
@@ -59,10 +73,20 @@ function parsePool(value) {
   const active = Number.isSafeInteger(value.active) && unique.includes(value.active) ? value.active : (unique[0] ?? null)
   const invalid = {}
   if (value.invalid !== null && typeof value.invalid === 'object' && !Array.isArray(value.invalid)) {
-    for (const [slot, at] of Object.entries(value.invalid)) {
+    for (const [slot, mark] of Object.entries(value.invalid)) {
       const number = Number(slot)
       if (!Number.isSafeInteger(number) || !unique.includes(number)) continue
-      invalid[number] = Number.isFinite(at) ? at : 0
+      // A pre-1.2 mark was the bare timestamp; newer ones carry the verdict too.
+      if (Number.isFinite(mark)) {
+        invalid[number] = { at: mark }
+        continue
+      }
+      if (mark === null || typeof mark !== 'object') continue
+      invalid[number] = {
+        at: Number.isFinite(mark.at) ? mark.at : 0,
+        ...typeof mark.code === 'string' && mark.code.length > 0 ? { code: mark.code } : {},
+        ...typeof mark.message === 'string' && mark.message.length > 0 ? { message: mark.message } : {},
+      }
     }
   }
   const maxSlot = unique.length > 0 ? Math.max(...unique) : 0
@@ -234,10 +258,12 @@ export class PoolStore {
    * @param {string} provider - the model channel's route key.
    * @param {(size: number) => boolean} [canSpend] - the caller's budget for this
    *   step, asked before anything is written; a false answer leaves the pool alone.
+   * @param {{code?: string, message?: string}} [reason] - why the key failed, kept
+   *   with the mark so the editor can tell a dead key from a dead relay.
    * @returns {Promise<{from: number, to: number, ref: string, size: number}|undefined>} the move, or
    *   undefined when this channel cannot rotate (no pool, a single key, or no budget).
    */
-  async rotate(provider, canSpend = () => true) {
+  async rotate(provider, canSpend = () => true, reason = {}) {
     return this.run(async () => {
       const state = await this.load()
       const pool = state.pools[provider]
@@ -254,11 +280,59 @@ export class PoolStore {
       }
       if (target === undefined) return undefined
 
-      pool.invalid[from] = this.now()
+      pool.invalid[from] = markOf(this.now(), reason)
       pool.active = target.slot
       await this.credentials.set(pool.ref, target.value)
       await this.save(state)
       return { from, to: target.slot, ref: pool.ref, size: pool.order.length }
+    })
+  }
+
+  /**
+   * The slots to probe, in sweep order, with their references resolved lazily by
+   * the caller (this store never hands out key values it does not have to).
+   * @param {string} provider - the model channel's route key.
+   * @returns {Promise<{ref: string, slots: {slot: number, ref: string}[]}>} the pool's
+   *   channel reference and one entry per slot.
+   */
+  async slots(provider) {
+    return this.run(async () => {
+      const state = await this.load()
+      const pool = state.pools[provider]
+      if (pool === undefined) return { ref: undefined, slots: [] }
+      return {
+        ref: pool.ref,
+        slots: pool.order.map(slot => ({ slot, ref: slotRefFor(pool.ref, slot) })),
+      }
+    })
+  }
+
+  /**
+   * Record the outcome of one self-check round.
+   *
+   * `ok` revives a slot (a working key is no longer suspect); a failure carrying a
+   * code marks it with the verdict; a failure without one — a timeout, a 429, a
+   * relay error — says nothing about the key and leaves its mark untouched.
+   * @param {string} provider - the model channel's route key.
+   * @param {{slot: number, ok: boolean, code?: string, message?: string}[]} outcomes - one per probed slot.
+   * @returns {Promise<object|undefined>} the pool view, or undefined for an unknown channel.
+   */
+  async applyProbe(provider, outcomes) {
+    return this.run(async () => {
+      const state = await this.load()
+      const pool = state.pools[provider]
+      if (pool === undefined) return undefined
+      for (const outcome of outcomes) {
+        if (!pool.order.includes(outcome.slot)) continue
+        if (outcome.ok === true) {
+          delete pool.invalid[outcome.slot]
+          continue
+        }
+        if (typeof outcome.code !== 'string' || outcome.code.length === 0) continue
+        pool.invalid[outcome.slot] = markOf(this.now(), { code: outcome.code, message: outcome.message })
+      }
+      await this.save(state)
+      return this.#describe(provider, pool)
     })
   }
 
@@ -337,12 +411,15 @@ export class PoolStore {
       } catch {
         /* A describe failure reads as "unknown", which the editor renders as unconfigured. */
       }
+      const mark = pool.invalid[slot]
       entries.push({
         slot,
         ref,
         configured: info.configured === true,
         masked: typeof info.masked === 'string' ? info.masked : undefined,
-        invalidAt: pool.invalid[slot],
+        invalidAt: mark === undefined ? undefined : mark.at,
+        ...mark !== undefined && mark.code !== undefined ? { code: mark.code } : {},
+        ...mark !== undefined && mark.message !== undefined ? { message: mark.message } : {},
       })
     }
     return { provider, ref: pool.ref, active: pool.active, entries }

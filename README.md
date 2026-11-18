@@ -9,7 +9,7 @@
 | 目录 | 包名 | 版本 | 挂载方式 | 作用 |
 |---|---|---|---|---|
 | `dsh-composer-kit/` | `dsh-composer-kit` | 1.0.0 | bundle | 输入框五件套：新会话、压缩上下文、简而言之、状态行换行、调用频率计 |
-| `dsh-client-ui-channel-key/` | `dsh-client-ui-channel-key` | 1.1.0 | bundle | 顶栏按钮：编辑当前模型渠道的密钥池；密钥被判失效时宿主自动换下一个 |
+| `dsh-client-ui-channel-key/` | `dsh-client-ui-channel-key` | 1.2.0 | bundle | 顶栏按钮：编辑当前模型渠道的密钥池；密钥被判失效时宿主自动换下一个，可自检 |
 | `dsh-llm-route-retry/` | `dsh-llm-route-retry` | 0.1.0 | insert | 池化中转「无额度」返回 AUTH 时重试 |
 | `sources/` | 5 个包 | — | 已并入 kit | `dsh-composer-kit` 的构建输入（合并前的原始插件） |
 

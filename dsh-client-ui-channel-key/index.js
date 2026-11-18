@@ -51,6 +51,99 @@ const RETRY_DELAY_MS = 300
 /** Credential references this route will accept, matching the seam's grammar. */
 const REF_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/
 
+/** How long one self-check request may take before it counts as inconclusive. */
+const PROBE_TIMEOUT_MS = 15_000
+
+/** The smallest completion worth sending: enough to prove the key can serve. */
+const PROBE_PROMPT = 'ping'
+
+/**
+ * Walk a settings value along a provider's settings path.
+ * @param {unknown} value - the namespace's value.
+ * @param {readonly string[]} path - path from the section root to the profile.
+ * @returns {unknown} the node, or undefined when the path does not resolve.
+ */
+function valueAt(value, path) {
+  let node = value
+  for (const key of path) {
+    if (node === null || typeof node !== 'object') return undefined
+    node = node[key]
+  }
+  return node
+}
+
+/**
+ * Build the minimal chat request that proves one key can serve this route.
+ *
+ * The key travels only to the endpoint the user's own provider profile names —
+ * never to a URL a browser handed over — and the request asks for a single token.
+ * @param {{api: string, baseURL: string, model: string}} route - the channel's wire facts.
+ * @param {string} key - the key to test.
+ * @returns {{url: string, init: object}|undefined} the request, or undefined for a
+ *   protocol this build cannot probe.
+ */
+export function probeRequest(route, key) {
+  const base = String(route.baseURL).replace(/\/+$/, '')
+  const json = { 'content-type': 'application/json', accept: 'application/json' }
+  if (route.api === 'openai-completions') {
+    return {
+      url: base + '/chat/completions',
+      init: {
+        method: 'POST',
+        headers: { ...json, authorization: 'Bearer ' + key },
+        body: JSON.stringify({
+          model: route.model,
+          messages: [{ role: 'user', content: PROBE_PROMPT }],
+          max_tokens: 1,
+          stream: false,
+        }),
+      },
+    }
+  }
+  if (route.api === 'openai-responses') {
+    return {
+      url: base + '/responses',
+      init: {
+        method: 'POST',
+        headers: { ...json, authorization: 'Bearer ' + key },
+        body: JSON.stringify({ model: route.model, input: PROBE_PROMPT, max_output_tokens: 16 }),
+      },
+    }
+  }
+  if (route.api === 'anthropic-messages') {
+    return {
+      url: base + (base.endsWith('/v1') ? '/messages' : '/v1/messages'),
+      init: {
+        method: 'POST',
+        headers: { ...json, 'x-api-key': key, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({
+          model: route.model,
+          max_tokens: 1,
+          messages: [{ role: 'user', content: PROBE_PROMPT }],
+        }),
+      },
+    }
+  }
+  return undefined
+}
+
+/**
+ * Classify one self-check response.
+ *
+ * Only a rejected key is a verdict about the key. A wrong model, a missing
+ * endpoint, a rate limit, or a relay outage says nothing about it, and marking
+ * the key for those would take a working channel out of service.
+ * @param {number} status - the HTTP status.
+ * @param {string} bodyText - the response body, for the recorded reason.
+ * @returns {{ok: true} | {ok: false, code: string, message: string} | {ok: false, message: string}} the verdict.
+ */
+export function probeVerdict(status, bodyText) {
+  const message = typeof bodyText === 'string' ? bodyText.replace(/\s+/g, ' ').trim().slice(0, 160) : ''
+  if (status >= 200 && status < 300) return { ok: true }
+  if (status === 401 || status === 403) return { ok: false, code: 'AUTH', message: message || 'HTTP ' + String(status) }
+  return { ok: false, message: message || 'HTTP ' + String(status) }
+}
+
 /**
  * Whether a failure is the `AUTH` class the conversation renders as
  * 「API 密钥无效」. The message is irrelevant: a relay reports an invalid key,
@@ -61,6 +154,19 @@ const REF_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/
  */
 export function isAuthFailure(failure) {
   return failure !== null && typeof failure === 'object' && failure.code === 'AUTH'
+}
+
+/**
+ * The reason stored with a rejected key, taken from the failure that rejected it.
+ * @param {unknown} failure - the terminal failure the adapter reported.
+ * @returns {{code?: string, message?: string}} the verdict to persist.
+ */
+export function reasonOf(failure) {
+  if (failure === null || typeof failure !== 'object') return {}
+  return {
+    ...typeof failure.code === 'string' && failure.code.length > 0 ? { code: failure.code } : {},
+    ...typeof failure.message === 'string' && failure.message.length > 0 ? { message: failure.message } : {},
+  }
 }
 
 /**
@@ -167,16 +273,17 @@ function channelOf(value) {
  */
 export function apply(ctx) {
   ctx.inject(['credentials'], scope => {
+    const credentials = scope.credentials
     const store = new PoolStore({
       read: readPoolText,
       write: writePoolText,
-      credentials: scope.credentials,
+      credentials,
     })
 
     /** Rotate, reporting rather than throwing: a rotation failure must not fail the request. */
-    const rotate = async (provider, canSpend) => {
+    const rotate = async (provider, canSpend, reason) => {
       try {
-        return await store.rotate(provider, canSpend)
+        return await store.rotate(provider, canSpend, reason)
       } catch (error) {
         ctx.logger.warn('channel-key: could not rotate the key pool for "%s": %s', provider, String(error))
         return undefined
@@ -193,7 +300,7 @@ export function apply(ctx) {
     scope.on('session/event', (session, event) => {
       if (event === null || typeof event !== 'object' || event.type !== 'llm/retry') return
       if (!rotationOfRetry(event.data)) return
-      void rotate(event.data.provider)
+      void rotate(event.data.provider, undefined, reasonOf(event.data.failure))
     }, { global: true })
 
     /**
@@ -209,7 +316,7 @@ export function apply(ctx) {
       const sessionId = session === undefined ? '' : String(session.id)
       if (attempts.size > 512) attempts.clear()
       const budgetKey = sessionId + '|' + String(payload.turn) + '|' + String(payload.step)
-      const moved = await rotate(provider, size => spendRotation(attempts, budgetKey, size))
+      const moved = await rotate(provider, size => spendRotation(attempts, budgetKey, size), reasonOf(payload.failure))
       if (moved === undefined) return next()
       const retryId = randomUUID()
       const attempt = 1
@@ -244,11 +351,72 @@ export function apply(ctx) {
       return { kind: 'retry' }
     }, { prepend: true, global: true })
 
+    /**
+     * The wire facts a self-check needs for one channel, read from the user's own
+     * provider profile. A browser never supplies this: the key would otherwise be
+     * posted to whatever URL a page named.
+     * @param {string} provider - the model channel's route key.
+     * @returns {{api: string, baseURL: string, model: string}|undefined} the route, or
+     *   undefined when the profile cannot answer.
+     */
+    const routeOf = provider => {
+      const llm = ctx.get('llm')
+      const settings = ctx.get('settings')
+      if (llm === undefined || settings === undefined) return undefined
+      const entry = llm.listConfigurableProviders().find(row => row.provider === provider)
+      if (entry === undefined) return undefined
+      const descriptor = settings.describe().find(row => row.ns === entry.settingsNs)
+      if (descriptor === undefined) return undefined
+      const profile = valueAt(descriptor.value, entry.settingsPath)
+      if (profile === null || typeof profile !== 'object') return undefined
+      const api = typeof profile.api === 'string' && profile.api.length > 0 ? profile.api : 'openai-completions'
+      const configured = typeof profile.baseURL === 'string' && profile.baseURL.length > 0 ? profile.baseURL : undefined
+      const baseURL = configured ?? entry.defaultBaseURL
+      const models = Array.isArray(profile.models) ? profile.models : []
+      const first = models[0]
+      const model = first !== null && typeof first === 'object' && typeof first.id === 'string' ? first.id : undefined
+      if (typeof baseURL !== 'string' || baseURL.length === 0 || model === undefined) return undefined
+      return { api, baseURL, model }
+    }
+
+    /**
+     * Check every key in the pool with one minimal request each, and record the
+     * verdicts. Requests run together: the pool is small and a serial sweep would
+     * make the button feel broken.
+     * @param {string} provider - the model channel's route key.
+     * @returns {Promise<{pool: object, results: object[]}>} the new view and the raw verdicts.
+     */
+    const probe = async provider => {
+      const pool = await store.slots(provider)
+      if (pool.slots.length === 0) throw new Error('this channel has no key to check yet')
+      const route = routeOf(provider)
+      if (route === undefined) {
+        throw new Error('could not read this channel\'s endpoint and model from the settings')
+      }
+      if (probeRequest(route, 'probe') === undefined) {
+        throw new Error('self-check does not support the "' + route.api + '" protocol')
+      }
+      const results = await Promise.all(pool.slots.map(async entry => {
+        const key = await credentials.resolve(entry.ref)
+        if (key === undefined || key.value.length === 0) {
+          return { slot: entry.slot, ok: false, message: 'the stored key is missing' }
+        }
+        const built = probeRequest(route, key.value)
+        try {
+          const response = await fetch(built.url, { ...built.init, signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) })
+          const text = await response.text().catch(() => '')
+          return { slot: entry.slot, ...probeVerdict(response.status, text) }
+        } catch (error) {
+          return { slot: entry.slot, ok: false, message: error instanceof Error ? error.message : String(error) }
+        }
+      }))
+      return { pool: await store.applyProbe(provider, results), results }
+    }
+
     // One store for both halves of this plugin: the route's edits and the
     // rotation must queue behind each other, or a save racing a failed request
     // could leave the channel pointing at a slot the user just removed.
-    scope.inject(['connection'], own => {
-      const registry = own.connection === undefined ? undefined : own.connection.fetch
+    scope.inject(['connection'], own => {      const registry = own.connection === undefined ? undefined : own.connection.fetch
       if (registry === undefined || typeof registry.register !== 'function') return
 
       registry.register({
@@ -269,6 +437,10 @@ export function apply(ctx) {
             const body = await request.json()
             const channel = channelOf(body)
             if (channel.error !== undefined) return json(400, { ok: false, error: { message: channel.error } })
+            if (body.op === 'probe') {
+              const outcome = await probe(channel.provider)
+              return json(200, { ok: true, pool: outcome.pool, probe: { results: outcome.results } })
+            }
             return json(200, { ok: true, pool: await store.applyOp(channel.provider, channel.ref, body) })
           } catch (error) {
             ctx.logger.warn('channel-key: key pool route failed: %s', String(error))

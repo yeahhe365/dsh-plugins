@@ -182,6 +182,11 @@ window.__ModuleLoader__.load({
       'error.poolUnsupported': '当前后台还不支持密钥池，请重启桌面端后再试',
       'error.oneAtATime': '当前后台只支持单个密钥，请一次只填一个',
       'action.export': '导出清单',
+      'action.probe': '自检',
+      'state.probing': '自检中…',
+      'state.probed': '自检完成：',
+      'pool.usable': '可用',
+      'pool.unknown': '未测出',
       'action.paste': '粘贴',
       'error.paste': '无法读取剪贴板，请用 Ctrl+V 粘贴',
       'error.clipboardEmpty': '剪贴板里没有密钥',
@@ -247,6 +252,11 @@ window.__ModuleLoader__.load({
       'error.poolUnsupported': 'This Host predates the key pool — restart the desktop app and try again',
       'error.oneAtATime': 'This Host accepts one key at a time; enter a single key',
       'action.export': 'Export list',
+      'action.probe': 'Check keys',
+      'state.probing': 'Checking…',
+      'state.probed': 'Self-check:',
+      'pool.usable': 'usable',
+      'pool.unknown': 'inconclusive',
       'action.paste': 'Paste',
       'error.paste': 'Could not read the clipboard — paste with Ctrl+V instead',
       'error.clipboardEmpty': 'The clipboard holds no key',
@@ -583,6 +593,7 @@ window.__ModuleLoader__.load({
           supported: true,
           ok: payload.ok === true,
           pool: payload.pool,
+          probe: payload.probe,
           message: payload.error !== null && typeof payload.error === 'object' ? payload.error.message : undefined,
         }
       }
@@ -801,6 +812,16 @@ window.__ModuleLoader__.load({
       var clearing = clearingState[0]
       var setClearing = clearingState[1]
 
+      /* Whether the running operation is the self-check. */
+      var probingState = React.useState(false)
+      var probing = probingState[0]
+      var setProbing = probingState[1]
+
+      /* Whether the self-check is the running operation. */
+      var probingState = React.useState(false)
+      var probing = probingState[0]
+      var setProbing = probingState[1]
+
       var anchorRef = React.useRef(null)
       var cardRef = React.useRef(null)
       var inputRef = React.useRef(null)
@@ -818,6 +839,7 @@ window.__ModuleLoader__.load({
         setNotice(null)
         setBusy(false)
         setClearing(false)
+        setProbing(false)
       }, [])
 
       var load = React.useCallback(function () {
@@ -860,6 +882,7 @@ window.__ModuleLoader__.load({
         setNotice(null)
         setBusy(false)
         setClearing(false)
+        setProbing(false)
         setOpen(true)
         load()
       }, [load])
@@ -915,6 +938,7 @@ window.__ModuleLoader__.load({
       function adoptPool(outcome, text) {
         setBusy(false)
         setClearing(false)
+        setProbing(false)
         setNotice({ kind: 'saved', text: text })
         setView(function (previous) {
           if (previous.channel === null) return previous
@@ -948,6 +972,7 @@ window.__ModuleLoader__.load({
       function reportPoolFailure(outcome) {
         setBusy(false)
         setClearing(false)
+        setProbing(false)
         if (outcome.unsupported === true) {
           setNotice({ kind: 'error', text: t('error.poolUnsupported') })
           return
@@ -997,6 +1022,58 @@ window.__ModuleLoader__.load({
             }
             adoptPool(outcome, opNotice(op))
           }, function (error) {
+            setBusy(false)
+            setNotice({ kind: 'error', text: messageOf(error) })
+          })
+      }
+
+      /**
+       * One line summarising a self-check round.
+       * @param {object} probe - the Host's `probe` payload.
+       * @returns {string} e.g. `2 可用 · 1 已失效 · 1 未测出`.
+       */
+      function probeSummary(probe) {
+        var results = probe !== undefined && probe !== null && Array.isArray(probe.results) ? probe.results : []
+        var usable = 0
+        var rejected = 0
+        var unknown = 0
+        for (var index = 0; index < results.length; index += 1) {
+          if (results[index].ok === true) usable += 1
+          else if (results[index].code !== undefined) rejected += 1
+          else unknown += 1
+        }
+        var text = usable + ' ' + t('pool.usable') + ' · ' + rejected + ' ' + t('pool.invalid')
+        if (unknown > 0) text += ' · ' + unknown + ' ' + t('pool.unknown')
+        return text
+      }
+
+      /** Check every key with one minimal request each, and show what came back. */
+      function runProbe() {
+        var channel = view.channel
+        if (channel === null || channel.ref === undefined || busy) return Promise.resolve()
+        setBusy(true)
+        setProbing(true)
+        setNotice(null)
+        return Promise.resolve()
+          .then(function () { return face.probe(channel) })
+          .then(function (outcome) {
+            if (!outcome.ok) {
+              setProbing(false)
+              reportPoolFailure(outcome)
+              return
+            }
+            setProbing(false)
+            setBusy(false)
+            setView(function (previous) {
+              if (previous.channel === null) return previous
+              return Object.assign({}, previous, {
+                channel: Object.assign({}, previous.channel, { derived: false }),
+                pool: { supported: true, ok: true, pool: outcome.pool },
+              })
+            })
+            setNotice({ kind: 'saved', text: probeSummary(outcome.probe) })
+          }, function (error) {
+            setProbing(false)
             setBusy(false)
             setNotice({ kind: 'error', text: messageOf(error) })
           })
@@ -1343,6 +1420,18 @@ window.__ModuleLoader__.load({
       }
 
       /**
+       * The tooltip for one rejected key: when it failed and what the provider said.
+       * @param {object} entry - one Host pool entry.
+       * @returns {string} the title text.
+       */
+      function invalidTitle(entry) {
+        var parts = [t('pool.invalidAt') + ' ' + formatTime(entry.invalidAt)]
+        if (entry.code !== undefined) parts.push(entry.code)
+        if (entry.message !== undefined) parts.push(entry.message)
+        return parts.join(' · ')
+      }
+
+      /**
        * One pool row: number, mask, state, and the controls that edit it.
        *
        * The controls stay invisible until the row is hovered or focused, so the
@@ -1394,7 +1483,7 @@ window.__ModuleLoader__.load({
             ? h('span', {
               key: 'invalid',
               'data-chk-badge': 'invalid',
-              title: t('pool.invalidAt') + ' ' + formatTime(entry.invalidAt),
+              title: invalidTitle(entry),
             }, t('pool.invalid'))
             : null,
           h('span', { key: 'actions', 'data-chk-actions-cluster': '' }, [
@@ -1514,6 +1603,13 @@ window.__ModuleLoader__.load({
       function renderPoolActions(pool) {
         var empty = pool === undefined || pool === null || pool.entries === undefined || pool.entries.length === 0
         return h('div', { 'data-chk-actions': '' },
+          h('button', {
+            type: 'button',
+            'data-chk-action': '',
+            'data-chk-probe': '',
+            disabled: empty || busy,
+            onClick: runProbe,
+          }, probing ? t('state.probing') : t('action.probe')),
           h('button', {
             type: 'button',
             'data-chk-action': '',
@@ -1673,6 +1769,7 @@ window.__ModuleLoader__.load({
         pool: function (channel) { return loadPool(channel) },
         mutate: function (channel, op) { return applyPoolOp(channel, op) },
         addKeys: function (channel, keys) { return addKeysToPool(ctx, channel, keys) },
+        probe: function (channel) { return applyPoolOp(channel, { op: 'probe' }) },
       }
 
       ctx.effect(function () {

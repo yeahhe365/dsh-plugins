@@ -216,6 +216,58 @@ test('clearing the pool removes every slot and the channel reference', async () 
   assert.equal(seam.values.size, 0)
 })
 
+test('a failed key records why it failed', async () => {
+  const { store } = makeStore({ credentials: fakeCredentials({ [REF]: 'sk-a' }) })
+  await store.applyOp('kk', REF, { op: 'add', keys: ['sk-b'] })
+
+  await store.rotate('kk', undefined, { code: 'AUTH', message: '401 invalid api key' })
+
+  const view = await store.view('kk', REF)
+  assert.equal(typeof view.entries[0].invalidAt, 'number')
+  assert.equal(view.entries[0].code, 'AUTH')
+  assert.equal(view.entries[0].message, '401 invalid api key')
+})
+
+test('a probe verdict marks and revives keys', async () => {
+  const { store } = makeStore({ credentials: fakeCredentials({ [REF]: 'sk-a' }) })
+  await store.applyOp('kk', REF, { op: 'add', keys: ['sk-b', 'sk-c'] })
+
+  const marked = await store.applyProbe('kk', [
+    { slot: 2, ok: false, code: 'AUTH', message: '401 key rejected' },
+    { slot: 3, ok: true },
+  ])
+  assert.equal(marked.entries[1].code, 'AUTH')
+  assert.equal(marked.entries[1].message, '401 key rejected')
+  assert.equal(marked.entries[2].invalidAt, undefined)
+
+  const revived = await store.applyProbe('kk', [{ slot: 2, ok: true }])
+  assert.equal(revived.entries[1].invalidAt, undefined)
+})
+
+test('an inconclusive probe leaves the mark alone', async () => {
+  const { store } = makeStore({ credentials: fakeCredentials({ [REF]: 'sk-a' }) })
+  await store.applyOp('kk', REF, { op: 'add', keys: ['sk-b'] })
+  await store.rotate('kk', undefined, { code: 'AUTH', message: 'dead' })
+
+  const view = await store.applyProbe('kk', [{ slot: 2, ok: false }])
+
+  assert.equal(view.entries[1].invalidAt, undefined, 'slot 2 was never marked')
+  assert.equal(view.entries[0].code, 'AUTH', 'the earlier mark survives')
+})
+
+test('an old numeric mark still reads', async () => {
+  const file = fakeFile(JSON.stringify({
+    version: 1,
+    pools: { kk: { ref: REF, order: [1], active: 1, nextSlot: 2, invalid: { 1: 1700000000000 } } },
+  }))
+  const { store } = makeStore({ credentials: fakeCredentials({ [REF]: 'sk-a' }), file })
+
+  const view = await store.view('kk', REF)
+
+  assert.equal(view.entries[0].invalidAt, 1700000000000)
+  assert.equal(view.entries[0].code, undefined)
+})
+
 test('the pool file never carries a key', async () => {
   const { store, disk } = makeStore({ credentials: fakeCredentials({ [REF]: 'sk-secret-a' }) })
   await store.applyOp('kk', REF, { op: 'add', keys: ['sk-secret-b'] })

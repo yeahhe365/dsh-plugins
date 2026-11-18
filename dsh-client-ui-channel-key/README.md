@@ -22,11 +22,12 @@ selected. Clicking it opens a small card anchored under the button:
 The active row carries a left accent bar; a rejected row is struck through and
 its badge tooltip says when it failed. Rows are dragged to reorder (one `move`
 op on drop), and the hover controls stay reachable by keyboard through
-`focus-within`. `添加` appends the field's keys to the pool, `粘贴` reads the
-clipboard and adds what it holds (a refused read says so and points at `Ctrl+V`),
-`导出清单` copies a masked inventory (order, preview, state — never the keys),
-`清除全部` removes the whole pool, and `取消` / `Esc` / a click outside closes the
-card. The `显示` / `隐藏` toggle is the same one the single-key card had.
+`focus-within`. `添加` appends the field's keys to the pool, `自检` probes every
+key with one minimal request, `粘贴` reads the clipboard and adds what it holds
+(a refused read says so and points at `Ctrl+V`), `导出清单` copies a masked
+inventory (order, preview, state — never the keys), `清除全部` removes the whole
+pool, and `取消` / `Esc` / a click outside closes the card. The
+`显示` / `隐藏` toggle is the same one the single-key card had.
 
 ## The pool
 
@@ -60,6 +61,32 @@ key", and the failure goes wherever it went before.
 **A step spends one rotation per spare key.** With two keys that is a single
 retry this plugin decides; the rest of the failures go downstream, so two dead
 keys can never hand the request back and forth forever.
+
+## Self-check
+
+`自检` asks the Host to send one minimal chat completion per key
+(`max_tokens: 1`), so it costs a token or two per key and answers the question
+the rotation can only answer by failing a real turn: **which key is dead?**
+
+- The endpoint and model come from the user's own provider profile; a browser
+  never supplies a URL, so a key cannot be posted anywhere else.
+- Only a rejected key is a verdict about the key. `401`/`403` marks it and
+  records why; a rate limit, a relay outage, a wrong model, or a missing
+  endpoint leaves the mark alone — those say nothing about the key.
+- A key that answers revives: its mark is cleared, and the next rotation can
+  choose it again.
+- A protocol this build cannot speak (`google-generative-ai`, Bedrock, …) is
+  reported instead of probed.
+
+The status line summarises the round: `2 可用 · 1 已失效 · 1 未测出`.
+
+## Failure reasons
+
+A rejected key keeps the verdict that rejected it, not just a timestamp:
+`{ at, code, message }`, with the provider's text trimmed to one line. The
+`已失效` badge shows it on hover — `401 USER_INACTIVE · 11-18 11:20` — which is
+the difference between a dead key and a dead relay. Pre-1.2 marks (a bare
+timestamp) still read.
 
 ## The Host route
 
@@ -108,7 +135,8 @@ single-key editor it shipped before, so a stale Host never breaks the button.
 | `locale/*.json` | Plugin Manager title and description |
 | `test/pool.test.mjs` | Pool model: import, order, marks, sweep, remove/clear, no secrets on disk |
 | `test/rotate.test.mjs` | Trigger rules and the per-step rotation budget |
-| `test/wiring.test.mjs` | `apply()` against a fake Host: route, rotation, budget, no secrets on disk |
+| `test/probe.test.mjs` | Probe request shape and the verdict rules |
+| `test/wiring.test.mjs` | `apply()` against a fake Host: route, rotation, budget, self-check, no secrets on disk |
 | `test/smoke.mjs` | Browser half without a browser (pure rules, Host reads, renders) |
 
 ## Trying it
