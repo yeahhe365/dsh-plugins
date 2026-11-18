@@ -220,6 +220,84 @@ test('the pool document holds references and marks, never a key', async () => {
   assert.ok(!text.includes('sk-first') && !text.includes('sk-second'), 'no key value reaches the document')
 })
 
+test('a balance lookup reads every key, caches it, and re-reads on refresh', async () => {
+  const credentials = fakeCredentials({ KK_API_KEY: 'sk-first-0001' })
+  const { routes } = boot(credentials, channelServices())
+  await routes[0].fetch(new Request(poolUrl(), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ provider: 'kk', ref: 'KK_API_KEY', op: 'add', keys: ['sk-second-0002'] }),
+  }))
+
+  const seen = []
+  const original = globalThis.fetch
+  globalThis.fetch = async (url, init) => {
+    seen.push({ url: String(url), init })
+    const key = String(init.headers.authorization).replace('Bearer ', '')
+    const balance = key === 'sk-first-0001' ? 4.85 : 0.1
+    return new Response(JSON.stringify({
+      balance,
+      unit: 'USD',
+      planName: '钱包余额',
+      isValid: true,
+      usage: { today: { actual_cost: 0.5 } },
+    }), { status: 200 })
+  }
+
+  const askBalance = () => routes[0].fetch(new Request(poolUrl(), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ provider: 'kk', ref: 'KK_API_KEY', op: 'balance' }),
+  }))
+
+  try {
+    const response = await askBalance()
+    const body = await response.json()
+
+    assert.equal(response.status, 200)
+    assert.equal(body.ok, true)
+    assert.equal(body.balance.results.length, 2)
+    assert.equal(body.balance.results[0].balance, 4.85)
+    assert.equal(body.balance.results[1].balance, 0.1)
+    assert.equal(body.balance.results[0].planName, '钱包余额')
+
+    // The key travelled to the channel's own endpoint only.
+    assert.equal(seen.length, 2)
+    assert.equal(seen[0].url, 'https://relay.test/v1/usage')
+    assert.equal(seen[0].init.headers.authorization, 'Bearer sk-first-0001')
+
+    // A second read inside the cache window costs no request.
+    await askBalance()
+    assert.equal(seen.length, 2, 'a fresh reading is reused')
+
+    // An explicit refresh bypasses the cache.
+    await routes[0].fetch(new Request(poolUrl(), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ provider: 'kk', ref: 'KK_API_KEY', op: 'balance', refresh: true }),
+    }))
+    assert.equal(seen.length, 4, 'refresh reads the gateway again')
+  } finally {
+    globalThis.fetch = original
+  }
+})
+
+test('a balance lookup reports a channel whose gateway has no endpoint', async () => {
+  const credentials = fakeCredentials({ KK_API_KEY: 'sk-first-0001' })
+  const { routes } = boot(credentials, channelServices({ api: 'anthropic-messages' }))
+  await routes[0].fetch(new Request(poolUrl()))
+  const response = await routes[0].fetch(new Request(poolUrl(), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ provider: 'kk', ref: 'KK_API_KEY', op: 'balance' }),
+  }))
+  const body = await response.json()
+  assert.equal(body.ok, true)
+  assert.equal(body.balance.results.length, 1)
+  assert.equal(body.balance.results[0].ok, false)
+  assert.match(body.balance.results[0].message, /no balance endpoint/)
+})
+
 test('a self-check probes every key and records the verdicts', async () => {
   const credentials = fakeCredentials({ KK_API_KEY: 'sk-good-0001' })
   const { routes } = boot(credentials, channelServices())

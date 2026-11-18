@@ -4,7 +4,8 @@
  * The button and its editor live in the browser bundle; this module owns the
  * part that has to survive a page reload:
  *
- *   - `GET|POST /api/dsh-channel-key/pool` — read and edit one channel's pool.
+ *   - `GET|POST /api/dsh-channel-key/pool` — read and edit one channel's pool,
+ *     and read every key's remaining balance.
  *   - the rotation: when a request is rejected as `AUTH` (the failure the
  *     conversation renders as 「API 密钥无效」), the next key in the pool becomes
  *     the one the channel resolves, and the failed key is skipped for the rest
@@ -142,6 +143,85 @@ export function probeVerdict(status, bodyText) {
   if (status >= 200 && status < 300) return { ok: true }
   if (status === 401 || status === 403) return { ok: false, code: 'AUTH', message: message || 'HTTP ' + String(status) }
   return { ok: false, message: message || 'HTTP ' + String(status) }
+}
+
+/** How long one key's balance stays fresh enough to skip a new request. */
+const BALANCE_TTL_MS = 60_000
+
+/** How long one balance request may take before it counts as inconclusive. */
+const BALANCE_TIMEOUT_MS = 10_000
+
+/**
+ * Build the request that asks a gateway for one key's remaining balance.
+ *
+ * The relay behind an OpenAI-shaped channel serves its own account endpoint
+ * beside the API base — `https://host/v1/usage` for a `.../v1` base — and
+ * answers with the balance that key's account holds. Only those protocols have
+ * it: the key travels in a bearer header, exactly as it already does for a
+ * completion, so a browser still never chooses the URL.
+ * @param {{api: string, baseURL: string}} route - the channel's wire facts.
+ * @param {string} key - the key to look up.
+ * @returns {{url: string, init: object}|undefined} the request, or undefined for a
+ *   protocol whose gateway has no such endpoint.
+ */
+export function balanceRequest(route, key) {
+  if (route === undefined || route === null) return undefined
+  if (route.api !== 'openai-completions' && route.api !== 'openai-responses') return undefined
+  const base = String(route.baseURL).replace(/\/+$/, '')
+  if (base.length === 0) return undefined
+  return {
+    url: base + '/usage',
+    init: {
+      method: 'GET',
+      headers: { accept: 'application/json', authorization: 'Bearer ' + key },
+    },
+  }
+}
+
+/**
+ * Read one number without accepting strings, `null`, or a NaN.
+ * @param {unknown} value - the candidate.
+ * @returns {number|undefined} the number, or undefined when it is not one.
+ */
+function numberOf(value) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+/**
+ * Classify one balance response.
+ *
+ * Only a body carrying a number is a reading. A 404 (a channel with no such
+ * endpoint), an HTML page, or JSON without a balance leaves the row unmeasured:
+ * guessing a zero would draw a healthy key as an empty one.
+ * @param {number} status - the HTTP status.
+ * @param {string} bodyText - the response body.
+ * @returns {{ok: true, balance: number, unit: string, planName?: string, todayCost?: number, valid: boolean}|{ok: false, message: string}} the reading.
+ */
+export function parseBalance(status, bodyText) {
+  if (status < 200 || status >= 300) return { ok: false, message: 'HTTP ' + String(status) }
+  let payload
+  try {
+    payload = JSON.parse(bodyText)
+  } catch {
+    return { ok: false, message: 'the balance response is not JSON' }
+  }
+  if (payload === null || typeof payload !== 'object') {
+    return { ok: false, message: 'the balance response is not an object' }
+  }
+  const balance = numberOf(payload.balance) ?? numberOf(payload.remaining)
+  if (balance === undefined) return { ok: false, message: 'the balance response carries no balance' }
+  const today = payload.usage !== null && typeof payload.usage === 'object'
+    && payload.usage.today !== null && typeof payload.usage.today === 'object'
+    ? numberOf(payload.usage.today.actual_cost)
+    : undefined
+  return {
+    ok: true,
+    balance,
+    unit: typeof payload.unit === 'string' && payload.unit.length > 0 ? payload.unit : 'USD',
+    planName: typeof payload.planName === 'string' && payload.planName.length > 0 ? payload.planName : undefined,
+    todayCost: today,
+    valid: payload.isValid !== false,
+  }
 }
 
 /**
@@ -293,6 +373,17 @@ export function apply(ctx) {
     /** Rotations this Host has spent, keyed by `session|turn|step`. */
     const attempts = new Map()
 
+    /**
+     * This Host's own retry chain per `session|turn|step`.
+     *
+     * The session format allows exactly one retry chain per (turn, step,
+     * provider, policyKey): its `retry` counter must climb 1, 2, 3, … and every
+     * row of that chain must carry the same `retryId`. A fresh id per rotation
+     * made a re-opened session fail validation with "llm/retry skips its policy
+     * attempt sequence", so the chain identity is kept per step instead.
+     */
+    const chains = new Map()
+
     // Give every retry another plugin decides a fresh key before it fires. The
     // retry's own delay is what makes this land in time; when it is zero the
     // rotation still reaches the attempt after it. `global` so a subtask's own
@@ -318,8 +409,15 @@ export function apply(ctx) {
       const budgetKey = sessionId + '|' + String(payload.turn) + '|' + String(payload.step)
       const moved = await rotate(provider, size => spendRotation(attempts, budgetKey, size), reasonOf(payload.failure))
       if (moved === undefined) return next()
-      const retryId = randomUUID()
-      const attempt = 1
+      if (chains.size > 512) chains.clear()
+      let chain = chains.get(budgetKey)
+      if (chain === undefined) {
+        chain = { retryId: randomUUID(), attempt: 0 }
+        chains.set(budgetKey, chain)
+      }
+      chain.attempt += 1
+      const retryId = chain.retryId
+      const attempt = chain.attempt
       try {
         payload.agent.session.append('llm/retry', {
           retryId,
@@ -329,7 +427,7 @@ export function apply(ctx) {
           mode: 'normal',
           policyKey: ROTATE_POLICY_KEY,
           retry: attempt,
-          maxRetries: moved.size - 1,
+          maxRetries: Math.max(attempt, moved.size - 1),
           delayMs: RETRY_DELAY_MS,
           failure: payload.failure,
         })
@@ -413,6 +511,56 @@ export function apply(ctx) {
       return { pool: await store.applyProbe(provider, results), results }
     }
 
+    /** Balance readings this Host has already paid a request for, keyed `provider|slot`. */
+    const balancesSeen = new Map()
+
+    /**
+     * Read one slot's balance, reusing a reading younger than the cache window.
+     * @param {string} provider - the model channel's route key.
+     * @param {{slot: number, ref: string}} entry - one pool slot.
+     * @param {object|undefined} route - the channel's wire facts.
+     * @param {boolean} force - true to ignore the cache (an explicit refresh).
+     * @returns {Promise<object>} one result row for the card.
+     */
+    const balanceOfSlot = async (provider, entry, route, force) => {
+      const cacheKey = provider + '|' + String(entry.slot)
+      const cached = balancesSeen.get(cacheKey)
+      if (force !== true && cached !== undefined && Date.now() - cached.at < BALANCE_TTL_MS) return cached.value
+      if (route === undefined) return { slot: entry.slot, ok: false, message: 'could not read this channel\'s endpoint from the settings' }
+      const key = await credentials.resolve(entry.ref)
+      if (key === undefined || key.value.length === 0) {
+        return { slot: entry.slot, ok: false, message: 'the stored key is missing' }
+      }
+      const built = balanceRequest(route, key.value)
+      if (built === undefined) {
+        return { slot: entry.slot, ok: false, message: 'this channel\'s protocol has no balance endpoint' }
+      }
+      try {
+        const response = await fetch(built.url, { ...built.init, signal: AbortSignal.timeout(BALANCE_TIMEOUT_MS) })
+        const text = await response.text().catch(() => '')
+        const value = { slot: entry.slot, ...parseBalance(response.status, text) }
+        balancesSeen.set(cacheKey, { at: Date.now(), value })
+        return value
+      } catch (error) {
+        return { slot: entry.slot, ok: false, message: error instanceof Error ? error.message : String(error) }
+      }
+    }
+
+    /**
+     * Read every key's balance, together: the pool is small and a serial sweep
+     * would leave the card half filled for seconds.
+     * @param {string} provider - the model channel's route key.
+     * @param {boolean} force - true to bypass the cache.
+     * @returns {Promise<{results: object[], at: number}>} one row per slot.
+     */
+    const balances = async (provider, force) => {
+      const pool = await store.slots(provider)
+      if (pool.slots.length === 0) return { results: [], at: Date.now() }
+      const route = routeOf(provider)
+      const results = await Promise.all(pool.slots.map(entry => balanceOfSlot(provider, entry, route, force)))
+      return { results, at: Date.now() }
+    }
+
     // One store for both halves of this plugin: the route's edits and the
     // rotation must queue behind each other, or a save racing a failed request
     // could leave the channel pointing at a slot the user just removed.
@@ -440,6 +588,9 @@ export function apply(ctx) {
             if (body.op === 'probe') {
               const outcome = await probe(channel.provider)
               return json(200, { ok: true, pool: outcome.pool, probe: { results: outcome.results } })
+            }
+            if (body.op === 'balance') {
+              return json(200, { ok: true, balance: await balances(channel.provider, body.refresh === true) })
             }
             return json(200, { ok: true, pool: await store.applyOp(channel.provider, channel.ref, body) })
           } catch (error) {

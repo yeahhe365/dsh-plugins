@@ -112,6 +112,10 @@ window.__ModuleLoader__.load({
       '[data-chk-badge]{flex:none;padding:0 6px;border-radius:999px;font-size:11px;line-height:17px;white-space:nowrap}',
       '[data-chk-badge="active"]{color:var(--dsw-alias-state-business-primary)}',
       '[data-chk-badge="invalid"]{color:var(--dsw-alias-state-error-primary)}',
+      '[data-chk-balance]{flex:none;font-size:11px;font-variant-numeric:tabular-nums;white-space:nowrap;',
+      'color:var(--dsw-alias-label-tertiary)}',
+      '[data-chk-balance][data-tone="low"]{color:var(--dsw-alias-state-warning-primary,var(--dsw-alias-label-secondary))}',
+      '[data-chk-balance][data-tone="zero"]{color:var(--dsw-alias-state-error-primary)}',
       '[data-chk-actions-cluster]{display:flex;align-items:center;gap:2px;flex:none;opacity:0;transition:opacity .12s}',
       '[data-chk-row]:hover [data-chk-actions-cluster],',
       '[data-chk-row]:focus-within [data-chk-actions-cluster]{opacity:1}',
@@ -124,7 +128,13 @@ window.__ModuleLoader__.load({
       '[data-chk-rowaction]:disabled{opacity:.3;cursor:default}',
       '[data-chk-rowaction][data-tone="danger"]:hover:not(:disabled){color:var(--dsw-alias-state-error-primary)}',
       '[data-chk-empty]{padding:6px 2px;font-size:12px;color:var(--dsw-alias-label-tertiary)}',
-      '[data-chk-summary]{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--dsw-alias-label-tertiary)}',
+      '[data-chk-summary]{display:flex;align-items:center;flex-wrap:wrap;gap:6px;font-size:11px;color:var(--dsw-alias-label-tertiary)}',
+      '[data-chk-total]{font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-secondary)}',
+      '[data-chk-refresh]{flex:none;padding:0 4px;border:none;border-radius:var(--dsw-radius-sm,6px);',
+      'background:transparent;color:var(--dsw-alias-label-tertiary);font-size:11px;font-family:inherit;cursor:pointer}',
+      '[data-chk-refresh]:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}',
+      '[data-chk-refresh]:focus-visible{outline:none;box-shadow:0 0 0 2px var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))}',
+      '[data-chk-refresh]:disabled{opacity:.5;cursor:default}',
       '[data-chk-hint]{font-size:11px;color:var(--dsw-alias-label-tertiary)}',
     ].join('')
 
@@ -185,6 +195,11 @@ window.__ModuleLoader__.load({
       'action.probe': '自检',
       'state.probing': '自检中…',
       'state.probed': '自检完成：',
+      'action.balance': '刷新余额',
+      'state.balancing': '查询余额…',
+      'balance.none': '—',
+      'balance.total': '总余额',
+      'balance.today': '今日',
       'pool.usable': '可用',
       'pool.unknown': '未测出',
       'action.paste': '粘贴',
@@ -255,6 +270,11 @@ window.__ModuleLoader__.load({
       'action.probe': 'Check keys',
       'state.probing': 'Checking…',
       'state.probed': 'Self-check:',
+      'action.balance': 'Refresh balance',
+      'state.balancing': 'Reading…',
+      'balance.none': '—',
+      'balance.total': 'Total',
+      'balance.today': 'today',
       'pool.usable': 'usable',
       'pool.unknown': 'inconclusive',
       'action.paste': 'Paste',
@@ -345,6 +365,40 @@ window.__ModuleLoader__.load({
       } catch (error) {
         return ''
       }
+    }
+
+    /* ------------------------------------------------------------------ *
+     * Balances
+     *
+     * The Host reads each key's remaining balance from the channel's own
+     * gateway; this half only prints it. A reading that failed is not a zero:
+     * the row keeps an em dash so "not looked up" and "out of credit" stay
+     * distinguishable at a glance.
+     * ------------------------------------------------------------------ */
+
+    /** A balance at or below this reads as running out. */
+    var LOW_BALANCE = 0.5
+
+    /**
+     * The symbol a balance unit prints as.
+     * @param {string} unit - e.g. `USD`.
+     * @returns {string} a currency symbol, or the unit followed by a space.
+     */
+    function unitSymbol(unit) {
+      if (unit === 'USD') return '$'
+      if (unit === 'CNY' || unit === 'RMB') return '¥'
+      if (unit === 'EUR') return '€'
+      return typeof unit === 'string' && unit.length > 0 ? unit + ' ' : ''
+    }
+
+    /**
+     * One balance as a row prints it.
+     * @param {{balance: number, unit: string}} reading - one successful reading.
+     * @returns {string} e.g. `$4.85`.
+     */
+    function formatBalance(reading) {
+      var value = reading !== null && reading !== undefined && typeof reading.balance === 'number' ? reading.balance : 0
+      return unitSymbol(reading !== null && reading !== undefined ? reading.unit : undefined) + value.toFixed(2)
     }
 
     /**
@@ -594,6 +648,7 @@ window.__ModuleLoader__.load({
           ok: payload.ok === true,
           pool: payload.pool,
           probe: payload.probe,
+          balance: payload.balance,
           message: payload.error !== null && typeof payload.error === 'object' ? payload.error.message : undefined,
         }
       }
@@ -822,6 +877,16 @@ window.__ModuleLoader__.load({
       var probing = probingState[0]
       var setProbing = probingState[1]
 
+      /* The Host's last balance reading, one row per slot, and whether a lookup
+         is running. Declared after the positions the smoke test pins. */
+      var balanceState = React.useState(null)
+      var balance = balanceState[0]
+      var setBalance = balanceState[1]
+
+      var balancingState = React.useState(false)
+      var balancing = balancingState[0]
+      var setBalancing = balancingState[1]
+
       var anchorRef = React.useRef(null)
       var cardRef = React.useRef(null)
       var inputRef = React.useRef(null)
@@ -840,6 +905,8 @@ window.__ModuleLoader__.load({
         setBusy(false)
         setClearing(false)
         setProbing(false)
+        setBalancing(false)
+        setBalance(null)
       }, [])
 
       var load = React.useCallback(function () {
@@ -862,6 +929,9 @@ window.__ModuleLoader__.load({
               .then(function (pool) {
                 if (generation.current !== mine) return
                 setView(function (previous) { return Object.assign({}, previous, { pool: pool }) })
+                if (pool.ok !== true || pool.pool === undefined || pool.pool.entries === undefined) return
+                if (pool.pool.entries.length === 0) return
+                return loadBalance(channel, false)
               }, function (error) {
                 if (generation.current !== mine) return
                 setView(function (previous) {
@@ -873,6 +943,32 @@ window.__ModuleLoader__.load({
             setView({ phase: 'error', channel: null, pool: undefined, message: messageOf(error) })
           })
       }, [face, sessionId, t])
+
+      /**
+       * Read every key's balance from the Host.
+       *
+       * The card renders its rows first and fills the numbers in when they
+       * arrive, so a slow gateway never holds the list back. A failed lookup is
+       * not a status: the row keeps its em dash and the list stays editable.
+       * @param {object} channel - the resolved channel.
+       * @param {boolean} refresh - true to bypass the Host's short-lived cache.
+       * @returns {Promise<void>} resolves when the reading lands.
+       */
+      function loadBalance(channel, refresh) {
+        if (face === undefined || channel === null || channel.ref === undefined) return Promise.resolve()
+        if (typeof face.balance !== 'function') return Promise.resolve()
+        setBalancing(true)
+        return Promise.resolve()
+          .then(function () { return face.balance(channel, refresh === true ? { refresh: true } : {}) })
+          .then(function (outcome) {
+            setBalancing(false)
+            if (outcome === undefined || outcome === null || outcome.ok !== true) return
+            if (outcome.balance === undefined) return
+            setBalance(outcome.balance)
+          }, function () {
+            setBalancing(false)
+          })
+      }
 
       var openDialog = React.useCallback(function () {
         var anchor = anchorRef.current
@@ -947,6 +1043,25 @@ window.__ModuleLoader__.load({
             channel: channel,
             pool: { supported: true, ok: true, pool: outcome.pool },
           })
+        })
+        pruneBalances(outcome.pool)
+      }
+
+      /**
+       * Drop balance rows for slots the pool no longer holds.
+       *
+       * A removed key's reading would otherwise outlive it, and a re-added slot
+       * number would inherit a stranger's balance.
+       * @param {object} pool - the pool the Host just answered with.
+       */
+      function pruneBalances(pool) {
+        setBalance(function (previous) {
+          if (previous === null || previous === undefined || !Array.isArray(previous.results)) return previous
+          if (pool === undefined || pool === null || !Array.isArray(pool.entries)) return null
+          var kept = pool.entries.map(function (entry) { return entry.slot })
+          var results = previous.results.filter(function (item) { return kept.indexOf(item.slot) !== -1 })
+          if (results.length === previous.results.length) return previous
+          return Object.assign({}, previous, { results: results })
         })
       }
 
@@ -1432,6 +1547,48 @@ window.__ModuleLoader__.load({
       }
 
       /**
+       * The tooltip for one balance: where the number comes from and what it
+       * spent today, when the gateway said.
+       * @param {object} reading - one successful Host reading.
+       * @returns {string} the title text.
+       */
+      function balanceTitle(reading) {
+        var parts = []
+        if (reading.planName !== undefined) parts.push(reading.planName)
+        if (typeof reading.todayCost === 'number') {
+          parts.push(t('balance.today') + ' ' + unitSymbol(reading.unit) + reading.todayCost.toFixed(2))
+        }
+        return parts.join(' · ')
+      }
+
+      /**
+       * The balance of one key.
+       *
+       * Nothing is shown until a reading exists — the rows render first and the
+       * numbers land after — and a reading the gateway refused stays an em dash,
+       * so "not looked up yet" never masquerades as "out of credit".
+       * @param {object|undefined} reading - the Host's row for this slot.
+       * @returns {object|null} the element, or null while nothing was read.
+       */
+      function renderBalance(reading) {
+        if (reading === undefined || reading === null) return null
+        if (reading.ok !== true) {
+          return h('span', {
+            key: 'balance',
+            'data-chk-balance': '',
+            title: reading.message === undefined ? '' : reading.message,
+          }, t('balance.none'))
+        }
+        var tone = reading.valid === false || reading.balance <= 0 ? 'zero' : (reading.balance <= LOW_BALANCE ? 'low' : undefined)
+        return h('span', {
+          key: 'balance',
+          'data-chk-balance': '',
+          'data-tone': tone,
+          title: balanceTitle(reading),
+        }, formatBalance(reading))
+      }
+
+      /**
        * One pool row: number, mask, state, and the controls that edit it.
        *
        * The controls stay invisible until the row is hovered or focused, so the
@@ -1439,8 +1596,9 @@ window.__ModuleLoader__.load({
        * @param {object} entry - one Host pool entry.
        * @param {number} index - its position in the sweep.
        * @param {object} pool - the whole pool, for the endpoints of the order.
+       * @param {object|undefined} reading - the Host's balance reading for this slot.
        */
-      function renderPoolRow(entry, index, pool) {
+      function renderPoolRow(entry, index, pool, reading) {
         var active = entry.slot === pool.active
         var rejected = entry.invalidAt !== undefined
         var dragging = drag !== null && drag.from === entry.slot
@@ -1478,6 +1636,7 @@ window.__ModuleLoader__.load({
           h('span', { key: 'num', 'data-chk-slotnum': '' }, '#' + entry.slot),
           h('span', { key: 'mask', 'data-chk-rowmask': '', title: entry.masked === undefined ? '' : entry.masked },
             entry.masked === undefined || entry.masked.length === 0 ? t('pool.empty') : entry.masked),
+          renderBalance(reading),
           active ? h('span', { key: 'active', 'data-chk-badge': 'active' }, t('pool.active')) : null,
           rejected
             ? h('span', {
@@ -1514,19 +1673,35 @@ window.__ModuleLoader__.load({
       }
 
       /**
+       * The balance readings, keyed by slot, so a row can find its own.
+       * @returns {object} slot → reading.
+       */
+      function balanceBySlot() {
+        var readings = {}
+        if (balance === null || balance === undefined || !Array.isArray(balance.results)) return readings
+        for (var index = 0; index < balance.results.length; index += 1) {
+          var item = balance.results[index]
+          if (item !== null && typeof item === 'object') readings[item.slot] = item
+        }
+        return readings
+      }
+
+      /**
        * The pool list, in the order requests walk it.
        * @param {object} pool - the Host pool.
        */
       function renderPoolList(pool) {
         if (pool === undefined || pool === null || pool.entries === undefined) return null
         if (pool.entries.length === 0) return h('div', { 'data-chk-empty': '' }, t('pool.none'))
+        var readings = balanceBySlot()
         return h('div', { 'data-chk-list': '' }, pool.entries.map(function (entry, index) {
-          return renderPoolRow(entry, index, pool)
+          return renderPoolRow(entry, index, pool, readings[entry.slot])
         }))
       }
 
       /**
-       * One line under the list: how many keys there are, how many were rejected.
+       * One line under the list: how many keys there are, how many were rejected,
+       * and what the pool holds in total, with the control that re-reads it.
        * An empty pool says so once, in the list itself.
        * @param {object} pool - the Host pool.
        */
@@ -1535,11 +1710,29 @@ window.__ModuleLoader__.load({
         if (pool.entries.length === 0) return null
         var total = pool.entries.length
         var rejected = pool.entries.filter(function (entry) { return entry.invalidAt !== undefined }).length
+        var known = []
+        if (balance !== null && balance !== undefined && Array.isArray(balance.results)) {
+          known = balance.results.filter(function (item) { return item.ok === true })
+        }
+        var sum = 0
+        for (var index = 0; index < known.length; index += 1) sum += known[index].balance
+        var unit = known.length > 0 ? known[0].unit : undefined
         return h('div', { 'data-chk-summary': '' },
           h('span', null, total + ' ' + t('pool.keys')),
           rejected > 0 ? h('span', null, '·') : null,
           rejected > 0 ? h('span', null, rejected + ' ' + t('pool.invalid')) : null,
+          known.length > 0 ? h('span', null, '·') : null,
+          known.length > 0
+            ? h('span', { 'data-chk-total': '' }, t('balance.total') + ' ' + unitSymbol(unit) + sum.toFixed(2))
+            : null,
           h('span', { 'data-chk-spacer': '' }),
+          h('button', {
+            type: 'button',
+            'data-chk-refresh': '',
+            disabled: balancing,
+            title: t('action.balance'),
+            onClick: function () { loadBalance(view.channel, true) },
+          }, balancing ? t('state.balancing') : t('action.balance')),
           h('span', { 'data-chk-hint': '' }, t('pool.drag')))
       }
 
@@ -1770,6 +1963,9 @@ window.__ModuleLoader__.load({
         mutate: function (channel, op) { return applyPoolOp(channel, op) },
         addKeys: function (channel, keys) { return addKeysToPool(ctx, channel, keys) },
         probe: function (channel) { return applyPoolOp(channel, { op: 'probe' }) },
+        balance: function (channel, options) {
+          return applyPoolOp(channel, Object.assign({ op: 'balance' }, options === undefined ? {} : options))
+        },
       }
 
       ctx.effect(function () {
@@ -1796,6 +1992,7 @@ window.__ModuleLoader__.load({
       splitKeyLines: splitKeyLines,
       deltaFor: deltaFor,
       inventoryText: inventoryText,
+      formatBalance: formatBalance,
       deriveKeyRef: deriveKeyRef,
       valueAt: valueAt,
       anchorPosition: anchorPosition,

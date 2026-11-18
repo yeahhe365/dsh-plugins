@@ -272,7 +272,18 @@ function fakeContext(options = {}) {
 /* ---------------------------------------------------------------- renders */
 
 function render(statePlan, extra = {}) {
-  const plan = { states: { 0: statePlan.open === true, 1: statePlan.view, 2: '', 3: false, 4: false, 5: statePlan.notice ?? null, 6: { top: 100, left: 200 } } }
+  const plan = {
+    states: {
+      0: statePlan.open === true,
+      1: statePlan.view,
+      2: '',
+      3: false,
+      4: false,
+      5: statePlan.notice ?? null,
+      6: { top: 100, left: 200 },
+      11: statePlan.balance ?? null,
+    },
+  }
   const { exports, sandbox } = loadPlugin(plan)
   const face = {
     translate: (key) => key,
@@ -435,6 +446,67 @@ const poolFixture = {
   assert.match(textOf(broken), /nope/)
   assert.equal(findByAttr(broken, 'data-chk-action').length, 2)
   console.log('ok  pool renders')
+}
+
+/* -------------------------------------------------------------- balances */
+
+{
+  const { exports } = loadPlugin()
+  const { formatBalance } = exports.__internals
+
+  // A reading prints with the unit's symbol; an unknown unit keeps its name.
+  assert.equal(formatBalance({ balance: 4.8468893, unit: 'USD' }), '$4.85')
+  assert.equal(formatBalance({ balance: 0.1, unit: 'CNY' }), '¥0.10')
+  assert.equal(formatBalance({ balance: 0, unit: 'USD' }), '$0.00')
+  assert.equal(formatBalance({ balance: 2, unit: 'credits' }), 'credits 2.00')
+  assert.equal(formatBalance({ balance: 3 }), '3.00', 'a missing unit prints no symbol')
+
+  const balanceFixture = {
+    at: 1700000000000,
+    results: [
+      { slot: 1, ok: true, balance: 4.85, unit: 'USD', planName: '钱包余额', todayCost: 0.5, valid: true },
+      { slot: 2, ok: false, message: 'no balance endpoint' },
+      { slot: 3, ok: true, balance: 0.1, unit: 'USD', valid: true },
+    ],
+  }
+  const withBalance = render({
+    open: true,
+    view: { phase: 'ready', channel, pool: { supported: true, ok: true, pool: poolFixture }, message: null },
+    balance: balanceFixture,
+  })
+
+  const rows = findByAttr(withBalance, 'data-chk-row')
+  assert.equal(rows.length, 3)
+  const balances = findByAttr(withBalance, 'data-chk-balance')
+  assert.equal(balances.length, 3, 'every row carries a reading, refused or not')
+  assert.equal(textOf(balances[0]), '$4.85')
+  assert.equal(textOf(balances[1]), 'balance.none', 'a refused reading stays an em dash')
+  assert.equal(balances[1].props.title, 'no balance endpoint', 'the refusal says why on hover')
+  assert.equal(balances[2].props['data-tone'], 'low', 'a nearly empty key is toned')
+  assert.equal(balances[0].props['data-tone'], undefined)
+  assert.match(balances[0].props.title, /钱包余额/)
+
+  const total = findByAttr(withBalance, 'data-chk-total')
+  assert.equal(total.length, 1)
+  assert.match(textOf(total[0]), /\$4\.95/, 'the summary adds the readable keys only')
+  const refresh = findByAttr(withBalance, 'data-chk-refresh')
+  assert.equal(refresh.length, 1, 'the summary carries the refresh control')
+  assert.equal(textOf(refresh[0]), 'action.balance')
+
+  // A zero balance reads as an error tone, and a reading with no data prints nothing.
+  const zero = render({
+    open: true,
+    view: { phase: 'ready', channel, pool: { supported: true, ok: true, pool: poolFixture }, message: null },
+    balance: { at: 1, results: [{ slot: 1, ok: true, balance: 0, unit: 'USD', valid: false }] },
+  })
+  assert.equal(findByAttr(zero, 'data-chk-balance')[0].props['data-tone'], 'zero')
+
+  // Before any reading lands the rows are still rows: no gap, no placeholder.
+  const unread = render({ open: true, view: { phase: 'ready', channel, pool: { supported: true, ok: true, pool: poolFixture }, message: null } })
+  assert.equal(findByAttr(unread, 'data-chk-balance').length, 0)
+  assert.equal(findByAttr(unread, 'data-chk-total').length, 0)
+  assert.equal(findByAttr(unread, 'data-chk-refresh').length, 1, 'the refresh control exists before the first reading')
+  console.log('ok  balance renders')
 }
 
 /* --------------------------------------------------------------- clipboard */

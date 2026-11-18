@@ -16,7 +16,8 @@ selected. Clicking it opens a small card anchored under the button:
 | 当前渠道 | The provider and model the composer's model seat currently points at |
 | 凭证引用 | The credential reference that channel resolves, e.g. `KK_API_KEY` |
 | 密钥列表 | One row per key: `#n`, masked preview, `当前使用` / `已失效`, and on hover 恢复 · 上移 · 下移 · 使用 · 删除 |
-| 汇总 | `3 个密钥 · 1 已失效`, with the drag hint on the right |
+| 余额 | Each key's remaining balance, read from the channel's own gateway; `刷新余额` re-reads it |
+| 汇总 | `3 个密钥 · 1 已失效 · 总余额 $4.95`, with the drag hint on the right |
 | API 密钥 | A write-only field with `粘贴` / `显示`; one key per `Enter`, or paste a whole block at once |
 
 The active row carries a left accent bar; a rejected row is struck through and
@@ -80,6 +81,27 @@ the rotation can only answer by failing a real turn: **which key is dead?**
 
 The status line summarises the round: `2 可用 · 1 已失效 · 1 未测出`.
 
+## Balances
+
+`余额` asks the Host for one number per key: the balance the key's own gateway
+reports. The relay behind an [OI]-shaped channel serves it beside the API base —
+`GET https://host/v1/usage` for a `.../v1` base — and answers with
+`{ balance, unit, planName, isValid, usage: { today: { actual_cost } } }`.
+
+- **Nothing is invented.** A gateway with no such endpoint (a 404), an HTML
+  page, or JSON without a number leaves the row as `—` with the reason on
+  hover. A zero is printed only when the gateway said zero.
+- **The reading is cached for 60 seconds** per key, so re-opening the card costs
+  no request; `刷新余额` bypasses the cache.
+- **Tone, not decoration:** a balance at or below `0.5` reads as running out, a
+  zero or `isValid: false` reads as an error.
+- **The URL comes from the profile, never from the browser**, and the key rides
+  in the same bearer header a completion already uses. A protocol this build
+  cannot ask (`anthropic-messages`, …) reports "no balance endpoint" instead of
+  probing.
+- **A failed lookup is not a verdict:** unlike `自检`, a balance read never marks
+  a key, because an account endpoint says nothing about whether a key can serve.
+
 ## Failure reasons
 
 A rejected key keeps the verdict that rejected it, not just a timestamp:
@@ -93,7 +115,7 @@ timestamp) still read.
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/api/dsh-channel-key/pool?provider=kk&ref=KK_API_KEY` | The pool, masks included |
-| `POST` | same path | One operation: `{ op: 'add', keys }`, `{ op: 'remove' \| 'restore' \| 'activate', slot }`, `{ op: 'move', slot, delta }`, `{ op: 'clear' }` |
+| `POST` | same path | One operation: `{ op: 'add', keys }`, `{ op: 'remove' \| 'restore' \| 'activate', slot }`, `{ op: 'move', slot, delta }`, `{ op: 'clear' }`, `{ op: 'probe' }`, `{ op: 'balance', refresh? }` |
 
 A Host that predates this route answers 404; the card then falls back to the
 single-key editor it shipped before, so a stale Host never breaks the button.
@@ -136,6 +158,7 @@ single-key editor it shipped before, so a stale Host never breaks the button.
 | `test/pool.test.mjs` | Pool model: import, order, marks, sweep, remove/clear, no secrets on disk |
 | `test/rotate.test.mjs` | Trigger rules and the per-step rotation budget |
 | `test/probe.test.mjs` | Probe request shape and the verdict rules |
+| `test/balance.test.mjs` | Balance request shape and the reading rules |
 | `test/wiring.test.mjs` | `apply()` against a fake Host: route, rotation, budget, self-check, no secrets on disk |
 | `test/smoke.mjs` | Browser half without a browser (pure rules, Host reads, renders) |
 
