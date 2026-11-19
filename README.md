@@ -40,15 +40,19 @@ npm test               # 6 项：注册、inject 并集、四个 slot 的 id/ord
 ```
 
 源包查找顺序：`DSH_COMPOSER_SOURCES` → `../sources`（本仓库布局）→
-`$DSH_PROFILE_DIR/.vendor`（profile 安装布局）。所以在仓库里和在实际 profile 里都能构建。
+`$DSH_PROFILE_DIR/.vendor`（profile 内安装）→ `$DSH_PLUGINS_DIR`（默认
+`~/.dsh/plugins`，全机器共用安装）。所以在仓库里和在实际 profile 里都能构建。
 
 ## 与 live 的关系（重要）
 
-**这个仓库是快照，不是 live 副本。** 实际生效的插件在 DSH profile 里：
+**这个仓库是快照，不是 live 副本。** 实际生效的插件不在仓库里：
 
 - `dsh-composer-kit`：profile 里是 `link:` 到一个工作区目录；
 - `dsh-client-ui-channel-key`、`dsh-llm-route-retry`、`sources/*`：在
-  `~/.dsh/profiles/desktop/.vendor/` 下。
+  `<profile>/.vendor/` 下，或者（多 profile 共用的机器上）在 `~/.dsh/plugins/` 下。
+
+两种布局都在用，所以脚本会按 `.vendor` → `~/.dsh/plugins` → `<profile>/plugins`
+的顺序找，找到哪个用哪个，不用改环境变量。
 
 改完 live 副本后，把改动同步进来再提交：
 
@@ -57,7 +61,15 @@ node scripts/sync.mjs          # live -> 仓库
 node scripts/sync.mjs --check  # 只报差异（有差异时退出码 1）
 ```
 
-环境变量：`DSH_PROFILE_DIR`（默认 desktop profile）、`DSH_COMPOSER_KIT_DIR`
+某台机器上没装某个包时，脚本只会报 `not installed here` 并跳过，不算差异；加
+`--strict` 才把「没装」也当成失败。
+
+仓库根目录的 `.syncignore` 列出**不纳入快照**的文件（每个 live 插件是自己的 git
+检出，带自己的 `.gitignore`；`sources/` 下的测试、设计笔记和市场截图也不是构建输入）。
+语法跟 git 一样：不带斜杠的模式匹配任意层级，指名目录的模式连带其下所有文件。
+
+环境变量：`DSH_PROFILE_DIR`（默认 `~/.dsh/profiles/desktop`）、
+`DSH_PLUGINS_DIR`（默认 `~/.dsh/plugins`）、`DSH_COMPOSER_KIT_DIR`
 （默认本仓库旁边的 `../dsh-composer-kit`）。
 
 ## 在新机器上装

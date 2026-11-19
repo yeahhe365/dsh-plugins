@@ -1,0 +1,14 @@
+# Files that exist inside a live checkout but deliberately stay out of the
+# snapshot. Matched against the repo-relative destination path, so `*` matches
+# exactly one path segment. See scripts/sync.mjs.
+
+# Every live plugin is its own git checkout, so it carries its own .gitignore.
+# A pattern without a slash matches that name at any depth.
+.gitignore
+
+# The five pre-merge sources under sources/ are build input for the kit. Their
+# tests, design notes and marketplace screenshot are not — the packages the repo
+# actually ships (kit, channel-key, route-retry) keep their own tests.
+sources/*/test
+sources/*/docs
+sources/*/preview.jpg

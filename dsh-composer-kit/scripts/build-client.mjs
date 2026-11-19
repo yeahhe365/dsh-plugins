@@ -15,6 +15,7 @@
  *   --check  regenerate into memory and compare with the file on disk
  */
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -29,16 +30,19 @@ const target = join(pkgRoot, 'client', 'client.js')
  *   1. `DSH_COMPOSER_SOURCES` — explicit override.
  *   2. `../sources` beside this package — the layout inside the dsh-plugins repo,
  *      which keeps the repo self-contained.
- *   3. `<DSH_PROFILE_DIR>/.vendor` — a live profile install, where the
- *      merged-away packages still sit.
+ *   3. `<DSH_PROFILE_DIR>/.vendor` — a profile that vendors its plugins.
+ *   4. `$DSH_PLUGINS_DIR` (default `~/.dsh/plugins`) — a machine that installs
+ *      the merged-away packages once for every profile.
  */
 const sourcesRoot = (() => {
   const override = process.env.DSH_COMPOSER_SOURCES
   if (override) return resolve(override)
   const repoSources = resolve(pkgRoot, '..', 'sources')
   if (existsSync(repoSources)) return repoSources
-  const profile = process.env.DSH_PROFILE_DIR ?? 'C:/Users/yeahhe/.dsh/profiles/desktop'
-  return join(profile, '.vendor')
+  const profile = process.env.DSH_PROFILE_DIR ?? join(homedir(), '.dsh', 'profiles', 'desktop')
+  const vendor = join(profile, '.vendor')
+  if (existsSync(vendor)) return vendor
+  return process.env.DSH_PLUGINS_DIR ?? join(homedir(), '.dsh', 'plugins')
 })()
 
 /**
