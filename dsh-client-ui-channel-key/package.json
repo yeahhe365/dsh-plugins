@@ -1,8 +1,8 @@
 {
   "name": "dsh-client-ui-channel-key",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "private": true,
-  "description": "Header button that edits the key pool of the model channel behind the current model selection, and the Host-side rotation that follows a rejected key. · 顶栏按钮：编辑当前模型渠道的密钥池；密钥被判失效时宿主自动换下一个。",
+  "description": "Header button that edits the key pool of the model channel behind the current model selection — also shown in the New Session row while the Session is still blank — plus the Host-side rotation that follows a rejected key. · 顶栏按钮（新建会话页同样显示）：编辑当前模型渠道的密钥池；密钥被判失效时宿主自动换下一个。",
   "type": "module",
   "main": "index.js",
   "exports": {

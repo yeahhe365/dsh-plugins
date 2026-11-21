@@ -14,6 +14,14 @@ window.__ModuleLoader__.load({
     /** The header list seat this button joins. */
     var SLOT = 'conversation.session.header.utilities'
 
+    /**
+     * The New Session row's option list. The header's utility row is not
+     * rendered while a Session is still blank (the Hero home), so the row that
+     * replaces it — the workspace and preset options above the composer — is
+     * where the same control stays reachable.
+     */
+    var HERO = 'conversation.hero.options'
+
     /* ------------------------------------------------------------------ *
      * Styles
      *
@@ -1979,6 +1987,21 @@ window.__ModuleLoader__.load({
           }, ChannelKeyButton)
         })
       }, 'channel-key: header action')
+
+      /* The utility row disappears on the Hero home, so the same control also
+         joins the New Session row, which exists only while the Session is
+         blank — one key button is reachable in either state. */
+      ctx.effect(function () {
+        return ctx.slots.inject(HERO, function () {
+          return ctx.slots.register({
+            name: HERO,
+            id: 'channel-key',
+            order: 10,
+            locale: NS,
+            inject: function () { return { channelKey: face } },
+          }, ChannelKeyButton)
+        })
+      }, 'channel-key: new session action')
     }
 
     exports.name = 'dsh-client-ui-channel-key'

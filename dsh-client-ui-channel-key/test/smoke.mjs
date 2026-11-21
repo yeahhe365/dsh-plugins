@@ -144,6 +144,46 @@ const channel = {
   console.log('ok  pure rules')
 }
 
+/* ------------------------------------------------------ new session seat */
+
+{
+  // The Hero row carries the same component the header utility row uses, so the
+  // second registration needs no wrapper of its own.
+  const plan = {
+    states: {
+      0: false,
+      1: { phase: 'loading', channel: null, message: null },
+      2: '',
+      3: false,
+      4: false,
+      5: null,
+      6: { top: 1, left: 1 },
+      11: null,
+    },
+  }
+  const { exports, sandbox } = loadPlugin(plan)
+  const registrations = []
+  const fakeCtx = {
+    effect: (fn) => { fn(); return () => {} },
+    locale: { register: () => () => {}, bind: () => (key) => key },
+    slots: {
+      inject: (name, callback) => { callback(); return () => {} },
+      register: (options, component) => {
+        registrations.push({ name: options.name, id: options.id, component })
+        return () => {}
+      },
+    },
+  }
+  exports.apply(fakeCtx)
+  const names = registrations.map((entry) => entry.name).sort()
+  assert.deepEqual(names, ['conversation.hero.options', 'conversation.session.header.utilities'])
+  for (const entry of registrations) {
+    assert.equal(entry.component, exports.__internals.ChannelKeyButton)
+  }
+  assert.ok(sandbox.window !== undefined)
+  console.log('ok  new session seat')
+}
+
 /* ------------------------------------------------------------ host reads */
 
 function fakeContext(options = {}) {

@@ -9,7 +9,13 @@ follows a rejected key. · 对话顶栏的钥匙按钮：编辑当前模型渠�
 
 One 28px key control joins the header's right-aligned utilities row, immediately
 left of the Session's `⋯` (More) menu, in every Session that has a model
-selected. Clicking it opens a small card anchored under the button:
+selected. Before a Session has any conversation, the Host does not render that
+utility row at all: the blank home keeps only the header's corner seat, and the
+sidebar's expand button already owns it. The same control therefore joins the
+New Session row — the workspace and preset options above the composer, right
+aligned — which exists only while the Session is blank, so one key button is
+reachable in either state and never twice. Clicking either opens a small card
+anchored under the button:
 
 | Row | Meaning |
 |---|---|
